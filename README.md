@@ -1,6 +1,6 @@
 # Beatbox Studio
 
-Beatbox Studio is a high-fidelity browser prototype for recording vocal percussion, assigning sounds to playable pads, arranging loops, and performing from a tactile studio surface.
+Beatbox Studio is a browser-based vocal percussion instrument for recording sounds, playing pads, building four-bar loops, and exporting finished ideas without uploading audio to a server.
 
 ## Preview
 
@@ -12,13 +12,25 @@ python -m http.server 4173
 
 Then visit `http://localhost:4173`.
 
-## Included
+## Features
 
-- Interactive desktop studio with microphone, pad, timeline, and transport states
-- Keyboard-triggered pads and Space-bar transport control
-- Responsive mobile Perform mode
-- Accessible focus, live status, and reduced-motion behavior
-- Reusable design rules and tokens in `DESIGN.md`
+- Web Audio-powered synthesized beatbox kit across three pad banks
+- Low-latency keyboard and pointer performance controls
+- Four-bar sequencer with BPM, metronome, count-in, quantized overdubbing, mute, solo, and track volume
+- Microphone recording directly into pads, plus audio file drag and drop
+- Local persistence for settings, recorded pads, and overdub events
+- Offline four-bar WAV export and native share support
+- Responsive mobile Perform mode with light and dark themes
+- Accessible live status, keyboard navigation, visible focus, and reduced-motion behavior
 
-The current build is a front-end interaction prototype. Audio capture, playback, persistence, and export are represented in the interface but are not yet connected to browser audio APIs or a backend.
+## Controls
 
+- `1–4`, `Q–R`, `A–F`: play pads
+- `Space`: play or pause
+- `Ctrl/Cmd+Z`: undo an overdub
+- `Ctrl/Cmd+Shift+Z`: redo an overdub
+- Double-click the session name to rename it
+
+## Privacy and browser support
+
+Microphone audio stays on the device. Recordings are stored in IndexedDB and are only included in a downloaded WAV when you explicitly export. A current Chromium, Firefox, or Safari release is recommended. Microphone access requires `localhost` or HTTPS.
