@@ -37,7 +37,7 @@ node tests/audio-engine.test.mjs
 - `Space`: play or pause
 - `Ctrl/Cmd+Z`: undo an overdub
 - `Ctrl/Cmd+Shift+Z`: redo an overdub
-- Use the `×` button on a recorded pad to delete that local recording
+- Use the trash button on a recorded pad to delete that local recording
 - Use the track `×` button to clear a built-in track; use `↺` to restore it
 - Use **Clear overdubs** to remove recorded loop hits, with Undo available
 - Double-click the session name to rename it

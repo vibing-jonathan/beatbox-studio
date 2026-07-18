@@ -186,7 +186,7 @@ function decoratePadShells() {
     const removeButton = document.createElement('button');
     removeButton.className = 'pad-remove';
     removeButton.type = 'button';
-    removeButton.textContent = '×';
+    removeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>';
     shell.append(removeButton);
   });
 }
@@ -606,7 +606,7 @@ async function finalizeInputRecording() {
     renderPads();
     micStatus.textContent = `${record.name} saved to pad ${key}`;
     privacyLabel.textContent = 'Saved locally';
-    toast(`${record.name} saved · use × on the pad to delete`, 'success', 4800);
+    toast(`${record.name} saved · use the trash button to delete`, 'success', 4800);
     announce(`${record.name} saved and ready to play`);
   } catch (error) {
     toast(error.message, 'error');
@@ -636,7 +636,7 @@ async function importAudioFile(file, pad) {
     recordedPads.set(slot, record);
     await saveRecordedPad(record);
     renderPads();
-    toast(`${record.name} loaded · use × on the pad to delete`, 'success', 4800);
+    toast(`${record.name} loaded · use the trash button to delete`, 'success', 4800);
     announce(`${record.name} loaded onto pad ${pad.dataset.key.toUpperCase()}`);
   } catch {
     toast('This audio file could not be decoded.', 'error');
