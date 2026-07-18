@@ -262,6 +262,7 @@
     }
     .pad-section, .timeline-section { background: var(--bg); min-width: 0; min-height: 0; padding: 20px; }
     .pad-section { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 14px; }
+    .pad-section.coach-dismissed { grid-template-rows: auto auto minmax(0, 1fr); }
     .timeline-section { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; }
     .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
     .section-heading h1, .section-heading h2 { margin: 0; font: 700 clamp(18px, 1.5vw, 24px)/1.05 var(--font-display); letter-spacing: -.035em; }
@@ -427,7 +428,8 @@
       .studio { grid-template-rows: 56px auto auto 82px; }
       .input-strip { min-height: 72px; grid-template-columns: 1fr 1.3fr auto auto; }
       .workspace { display: block; overflow: visible; }
-      .pad-section { min-height: 540px; border-bottom: 1px solid var(--border); }
+      .pad-section { min-height: 540px; border-bottom: 1px solid var(--border); grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+      .pad-section.coach-dismissed { grid-template-rows: auto auto auto minmax(0, 1fr); }
       .timeline-section { min-height: 460px; }
       .transport { position: sticky; bottom: 0; }
     }

@@ -882,6 +882,7 @@ function wireEvents() {
   });
 
   document.getElementById('coach-dismiss').addEventListener('click', () => {
+    document.querySelector('.pad-section').classList.add('coach-dismissed');
     document.getElementById('coach').remove();
     announce('Coaching dismissed');
   });
