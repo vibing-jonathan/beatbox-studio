@@ -1,5 +1,27 @@
 import { AudioEngine, audioBufferToWav, normalizeSampleSettings } from './audio-engine.js';
-import { loadRecordedPads, loadSettings, removeRecordedPad, saveRecordedPad, saveSettings } from './storage.js';
+import {
+  deleteProjectSession,
+  getActiveProjectId,
+  listProjectSessions,
+  loadProjectRecovery,
+  loadProjectSession,
+  loadRecordedPads,
+  loadSettings,
+  removeRecordedPad,
+  saveProjectSession,
+  saveRecordedPad,
+  saveSettings,
+  setActiveProjectId,
+} from './storage.js';
+import {
+  cleanProjectName,
+  createProjectRecord,
+  duplicateProjectRecord,
+  parseProjectBundle,
+  projectFileName,
+  serializeProjectBundle,
+  uniqueProjectName,
+} from './project-session.js';
 import { loopPositionAtTime, normalizeLoopPosition, quantizeLoopPosition, SWING_OFFSET_STEPS } from './timing.js';
 import {
   createInitialPatterns,
@@ -59,6 +81,17 @@ const nudgeRightButton = document.getElementById('nudge-right');
 const timingOutput = document.getElementById('timing-output');
 const sampleSheet = document.getElementById('sample-sheet');
 const sampleScrim = document.getElementById('sample-scrim');
+const projectSheet = document.getElementById('project-sheet');
+const projectScrim = document.getElementById('project-scrim');
+const projectList = document.getElementById('project-list');
+const projectSearch = document.getElementById('project-search');
+const projectCount = document.getElementById('project-count');
+const projectRecovery = document.getElementById('project-recovery');
+const projectError = document.getElementById('project-error');
+const projectConflict = document.getElementById('project-conflict');
+const newProjectForm = document.getElementById('new-project-form');
+const newProjectName = document.getElementById('new-project-name');
+const importProjectFile = document.getElementById('import-project-file');
 const sampleNameInput = document.getElementById('sample-name');
 const sampleMeta = document.getElementById('sample-meta');
 const waveformEditor = document.getElementById('waveform-editor');
@@ -146,6 +179,15 @@ let velocitySnapshot = null;
 let deleteSampleArmed = false;
 let lastVisualStep = -1;
 let sampleReturnFocus = null;
+let activeProjectId = null;
+let activeProjectCreatedAt = Date.now();
+let projectSavePromise = Promise.resolve();
+let projectCache = [];
+let projectReturnFocus = null;
+let pendingDeleteProjectId = null;
+let pendingDeleteTimer = null;
+let pendingImportedProject = null;
+let lastProjectFingerprint = '';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -227,23 +269,93 @@ function setSaveLabel(text, busy = false) {
   saveState.lastChild.textContent = text;
 }
 
+function currentSettings() {
+  return {
+    activeBank: state.activeBank,
+    bpm: state.bpm,
+    metronome: state.metronome,
+    countIn: state.countIn,
+    quantize: state.quantize,
+    projectName: state.projectName,
+    trackStates: state.trackStates,
+    loopBars: state.loopBars,
+    patterns: state.patterns,
+    activePatternId: state.activePatternId,
+  };
+}
+
+function applyStoredSettings(settings = {}) {
+  const patterns = createInitialPatterns(settings, TRACKS);
+  state.activeBank = BANKS[settings.activeBank] ? settings.activeBank : 'Bank A';
+  state.bpm = clamp(Number(settings.bpm) || 92, 40, 240);
+  state.metronome = settings.metronome ?? true;
+  state.countIn = settings.countIn ?? true;
+  state.quantize = ['1/16', '1/8 swing', '1/8', 'Off'].includes(settings.quantize) ? settings.quantize : '1/16';
+  state.projectName = cleanProjectName(settings.projectName, 'Untitled session');
+  state.trackStates = TRACKS.map((track, index) => ({
+    id: track.id,
+    volume: clamp(Number(settings.trackStates?.[index]?.volume) || Number(trackElements[index]?.querySelector('.volume')?.value) || 75, 0, 100),
+    muted: Boolean(settings.trackStates?.[index]?.muted),
+    solo: Boolean(settings.trackStates?.[index]?.solo),
+    cleared: Boolean(settings.trackStates?.[index]?.cleared),
+  }));
+  state.loopBars = [1, 2, 4, 8].includes(Number(settings.loopBars)) ? Number(settings.loopBars) : 4;
+  state.patterns = patterns.patterns;
+  state.activePatternId = patterns.activePatternId;
+}
+
+function currentProjectRecord(now = Date.now()) {
+  return {
+    id: activeProjectId,
+    name: cleanProjectName(state.projectName),
+    createdAt: activeProjectCreatedAt,
+    updatedAt: now,
+    settings: structuredClone(currentSettings()),
+    recordings: [...recordedPads.values()].map((recording) => ({ ...recording })),
+  };
+}
+
+function currentProjectFingerprint() {
+  return JSON.stringify({
+    settings: currentSettings(),
+    recordings: [...recordedPads.values()].map((recording) => ({
+      slot: recording.slot,
+      name: recording.name,
+      updatedAt: recording.updatedAt,
+      size: recording.blob?.size ?? 0,
+    })),
+  });
+}
+
+async function flushProjectSave({ createRecovery = true } = {}) {
+  if (!activeProjectId) return null;
+  const fingerprint = currentProjectFingerprint();
+  if (fingerprint === lastProjectFingerprint) {
+    return projectCache.find((project) => project.id === activeProjectId) ?? currentProjectRecord();
+  }
+  const snapshot = currentProjectRecord();
+  projectSavePromise = projectSavePromise.then(() => saveProjectSession(snapshot, { createRecovery }));
+  const saved = await projectSavePromise;
+  lastProjectFingerprint = fingerprint;
+  const existingIndex = projectCache.findIndex((project) => project.id === saved.id);
+  if (existingIndex >= 0) projectCache[existingIndex] = saved;
+  else projectCache.push(saved);
+  projectCache.sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+  return saved;
+}
+
 function persist() {
   clearTimeout(saveTimer);
   setSaveLabel('Saving…', true);
-  saveTimer = window.setTimeout(() => {
-    saveSettings({
-      activeBank: state.activeBank,
-      bpm: state.bpm,
-      metronome: state.metronome,
-      countIn: state.countIn,
-      quantize: state.quantize,
-      projectName: state.projectName,
-      trackStates: state.trackStates,
-      loopBars: state.loopBars,
-      patterns: state.patterns,
-      activePatternId: state.activePatternId,
-    });
-    setSaveLabel('Saved just now');
+  saveTimer = window.setTimeout(async () => {
+    saveSettings(currentSettings());
+    try {
+      await flushProjectSave();
+      setSaveLabel('Saved just now · on this device');
+    } catch {
+      setSaveLabel('Save failed');
+      toast('This session could not be saved locally.', 'error');
+    }
   }, 260);
 }
 
@@ -803,6 +915,7 @@ async function finalizeInputRecording() {
     };
     recordedPads.set(record.slot, record);
     await saveRecordedPad(record);
+    persist();
     renderPads();
     micStatus.textContent = `${record.name} saved to pad ${key}`;
     privacyLabel.textContent = 'Saved locally';
@@ -835,6 +948,7 @@ async function importAudioFile(file, pad) {
     const record = { slot, blob: file, duration, name: file.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Imported sound', ...normalizeSampleSettings({}, duration), updatedAt: Date.now() };
     recordedPads.set(slot, record);
     await saveRecordedPad(record);
+    persist();
     renderPads();
     toast(`${record.name} loaded · use the trash button to delete`, 'success', 4800);
     announce(`${record.name} loaded onto pad ${pad.dataset.key.toUpperCase()}`);
@@ -1138,6 +1252,7 @@ async function saveActiveSample(settings, { redraw = true } = {}) {
   if (!record) return;
   updateRecordSettings(record, settings);
   await saveRecordedPad(record);
+  persist();
   if (redraw) renderSampleEditor();
   renderPads();
 }
@@ -1166,6 +1281,7 @@ async function duplicateActiveSample() {
   await engine.registerRecording(target, copy.blob);
   recordedPads.set(target, copy);
   await saveRecordedPad(copy);
+  persist();
   renderPads();
   populateMoveTargets();
   toast(`${record.name} duplicated to ${target.replace(':', ' · ')}`, 'success');
@@ -1212,6 +1328,7 @@ async function replaceActiveSample(file) {
     const duration = await engine.registerRecording(record.slot, file);
     Object.assign(record, { blob: file, duration, ...normalizeSampleSettings({}, duration), updatedAt: Date.now() });
     await saveRecordedPad(record);
+    persist();
     renderPads();
     renderSampleEditor();
     toast('Recording replaced. Pad key and sequence hits were kept.', 'success');
@@ -1220,33 +1337,357 @@ async function replaceActiveSample(file) {
   }
 }
 
-function beginProjectRename() {
-  const before = state.projectName;
-  projectName.contentEditable = 'true';
-  projectName.classList.add('is-editing');
-  projectName.focus();
-  const range = document.createRange();
-  range.selectNodeContents(projectName);
-  const selection = getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
-  const finish = (save) => {
-    projectName.contentEditable = 'false';
-    projectName.classList.remove('is-editing');
-    projectName.textContent = save ? projectName.textContent.trim().slice(0, 48) || before : before;
-    state.projectName = projectName.textContent;
-    projectName.setAttribute('aria-label', `${state.projectName}. Rename project`);
-    projectName.removeEventListener('blur', onBlur);
-    projectName.removeEventListener('keydown', onEditKeydown);
-    persist();
+function defaultProjectSettings(name = 'Untitled session') {
+  return {
+    activeBank: 'Bank A',
+    bpm: 92,
+    metronome: true,
+    countIn: true,
+    quantize: '1/16',
+    projectName: cleanProjectName(name),
+    trackStates: TRACKS.map((track, index) => ({
+      id: track.id,
+      volume: Number(trackElements[index]?.querySelector('.volume')?.defaultValue) || 75,
+      muted: false,
+      solo: false,
+      cleared: false,
+    })),
+    loopBars: 4,
+    patterns: [{ id: 'pattern-1', name: 'Pattern 1', events: [] }],
+    activePatternId: 'pattern-1',
   };
-  const onBlur = () => finish(true);
-  const onEditKeydown = (event) => {
-    if (event.key === 'Enter') { event.preventDefault(); projectName.blur(); }
+}
+
+function renderStudioState() {
+  bpmInput.value = String(state.bpm);
+  metronomeButton.setAttribute('aria-pressed', String(state.metronome));
+  countInButton.setAttribute('aria-pressed', String(state.countIn));
+  countInButton.textContent = state.countIn ? 'Count-in · 1 bar' : 'Count-in · off';
+  quantizeSelect.value = state.quantize;
+  document.querySelector('.transport-right .readout-value').textContent = state.quantize;
+  projectName.textContent = state.projectName;
+  projectName.setAttribute('aria-label', `${state.projectName}. Open project library`);
+  selectedEventIds.clear();
+  history = [sequenceSnapshot()];
+  historyIndex = 0;
+  renderBankButtons();
+  renderPads();
+  renderTrackStates();
+  renderSequencer();
+  renderHistoryControls();
+}
+
+function formatProjectAge(timestamp) {
+  const elapsed = Math.max(0, Date.now() - Number(timestamp || 0));
+  if (elapsed < 60_000) return 'saved just now';
+  if (elapsed < 3_600_000) return `saved ${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 86_400_000) return `saved ${Math.floor(elapsed / 3_600_000)}h ago`;
+  return `saved ${Math.floor(elapsed / 86_400_000)}d ago`;
+}
+
+function projectDurationLabel(project) {
+  const bpm = clamp(Number(project.settings?.bpm) || 92, 40, 240);
+  const bars = Number(project.settings?.loopBars) || 4;
+  const seconds = Math.round((bars * 4 * 60) / bpm);
+  return `${seconds}s loop`;
+}
+
+function showProjectError(message = '') {
+  projectError.textContent = message;
+  projectError.classList.toggle('open', Boolean(message));
+}
+
+async function updateProjectRecovery() {
+  const recovery = activeProjectId ? await loadProjectRecovery(activeProjectId) : null;
+  projectRecovery.classList.toggle('open', Boolean(recovery));
+}
+
+function renderProjectLibrary() {
+  const query = projectSearch.value.trim().toLocaleLowerCase();
+  const visible = projectCache.filter((project) => project.name.toLocaleLowerCase().includes(query));
+  projectCount.textContent = `${projectCache.length} ${projectCache.length === 1 ? 'SESSION' : 'SESSIONS'}`;
+  projectList.replaceChildren();
+
+  if (!projectCache.length) {
+    const empty = document.createElement('div');
+    empty.className = 'project-empty';
+    const title = document.createElement('strong');
+    title.textContent = 'No sessions on this device';
+    empty.append(title, document.createTextNode('Create a session or import a .beatbox bundle to begin.'));
+    projectList.append(empty);
+    return;
+  }
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'project-empty';
+    const title = document.createElement('strong');
+    title.textContent = 'No matching sessions';
+    empty.append(title, document.createTextNode(`Nothing matches “${projectSearch.value.trim()}”.`));
+    projectList.append(empty);
+    return;
+  }
+
+  visible.forEach((project) => {
+    const item = document.createElement('article');
+    item.className = `project-item${project.id === activeProjectId ? ' active' : ''}`;
+    item.dataset.projectId = project.id;
+
+    const main = document.createElement('div');
+    main.className = 'project-item-main';
+    const title = document.createElement('div');
+    title.className = 'project-item-title';
+    const name = document.createElement('strong');
+    name.textContent = project.name;
+    title.append(name);
+    if (project.id === activeProjectId) {
+      const chip = document.createElement('span');
+      chip.className = 'project-active-chip';
+      chip.textContent = 'OPEN';
+      title.append(chip);
+    }
+    const meta = document.createElement('div');
+    meta.className = 'project-item-meta';
+    meta.textContent = `${project.settings?.bpm || 92} BPM · ${project.settings?.loopBars || 4} bars · ${projectDurationLabel(project)} · ${formatProjectAge(project.updatedAt)}`;
+    main.append(title, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'project-item-actions';
+    const actionDefinitions = [
+      ['open', project.id === activeProjectId ? 'Open' : 'Load'],
+      ['rename', 'Rename'],
+      ['duplicate', 'Copy'],
+      ['delete', pendingDeleteProjectId === project.id ? 'Confirm delete' : 'Delete'],
+    ];
+    actionDefinitions.forEach(([action, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.projectAction = action;
+      button.textContent = label;
+      if (action === 'delete') button.className = pendingDeleteProjectId === project.id ? 'danger confirm' : 'danger';
+      if (action === 'open' && project.id === activeProjectId) button.disabled = true;
+      actions.append(button);
+    });
+    item.append(main, actions);
+    projectList.append(item);
+  });
+}
+
+async function refreshProjectCache() {
+  projectCache = await listProjectSessions();
+  renderProjectLibrary();
+}
+
+async function loadProjectIntoStudio(project) {
+  stopTransport();
+  if (sampleSheet?.classList.contains('open')) closeSampleEditor();
+  [...recordedPads.keys()].forEach((slot) => engine.removeRecording(slot));
+  recordedPads.clear();
+
+  if (!project) {
+    activeProjectId = null;
+    activeProjectCreatedAt = Date.now();
+    setActiveProjectId(null);
+    lastProjectFingerprint = '';
+    applyStoredSettings(defaultProjectSettings('No session'));
+    state.projectName = 'No session';
+    renderStudioState();
+    setSaveLabel('No session open');
+    renderProjectLibrary();
+    await updateProjectRecovery();
+    return;
+  }
+
+  applyStoredSettings({ ...project.settings, projectName: project.name });
+  activeProjectId = project.id;
+  activeProjectCreatedAt = Number(project.createdAt) || Date.now();
+  setActiveProjectId(project.id);
+  for (const record of project.recordings ?? []) {
+    try {
+      await engine.registerRecording(record.slot, record.blob);
+      Object.assign(record, normalizeSampleSettings(record, record.duration));
+      recordedPads.set(record.slot, record);
+    } catch {
+      toast(`${record.name || 'A recording'} could not be restored.`, 'error');
+    }
+  }
+  saveSettings(currentSettings());
+  lastProjectFingerprint = currentProjectFingerprint();
+  renderStudioState();
+  setSaveLabel('Saved just now · on this device');
+  renderProjectLibrary();
+  await updateProjectRecovery();
+  announce(`${project.name} opened`);
+}
+
+async function initializeProjectSession() {
+  projectCache = await listProjectSessions();
+  if (!projectCache.length) {
+    const legacyRecordings = await loadRecordedPads();
+    const migrated = createProjectRecord({
+      name: state.projectName,
+      settings: currentSettings(),
+      recordings: legacyRecordings,
+    });
+    await saveProjectSession(migrated, { createRecovery: false });
+    projectCache = [migrated];
+  }
+  const requestedId = getActiveProjectId();
+  const active = projectCache.find((project) => project.id === requestedId) ?? projectCache[0];
+  await loadProjectIntoStudio(active);
+}
+
+async function openProjectLibrary() {
+  projectReturnFocus = document.activeElement;
+  await flushProjectSave();
+  await refreshProjectCache();
+  await updateProjectRecovery();
+  showProjectError();
+  projectSheet.classList.add('open');
+  projectScrim.classList.add('open');
+  projectSheet.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  projectSearch.focus();
+}
+
+function closeProjectLibrary() {
+  projectSheet.classList.remove('open');
+  projectScrim.classList.remove('open');
+  projectSheet.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  newProjectForm.classList.remove('open');
+  projectConflict.classList.remove('open');
+  pendingImportedProject = null;
+  projectReturnFocus?.focus?.();
+}
+
+async function createNewProject(name) {
+  const safeName = uniqueProjectName(name, projectCache.map((project) => project.name));
+  const project = createProjectRecord({ name: safeName, settings: defaultProjectSettings(safeName) });
+  await saveProjectSession(project, { createRecovery: false });
+  projectCache.unshift(project);
+  await loadProjectIntoStudio(project);
+  newProjectForm.classList.remove('open');
+  toast(`${project.name} created`, 'success');
+}
+
+function beginLibraryRename(projectId) {
+  const item = projectList.querySelector(`[data-project-id="${CSS.escape(projectId)}"]`);
+  const project = projectCache.find((candidate) => candidate.id === projectId);
+  const title = item?.querySelector('.project-item-title');
+  if (!title || !project) return;
+  title.replaceChildren();
+  const input = document.createElement('input');
+  input.className = 'project-rename-input';
+  input.maxLength = 48;
+  input.value = project.name;
+  title.append(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async (save) => {
+    if (finished) return;
+    finished = true;
+    if (save) {
+      const nextName = cleanProjectName(input.value, project.name);
+      project.name = uniqueProjectName(nextName, projectCache.filter((candidate) => candidate.id !== project.id).map((candidate) => candidate.name));
+      project.settings = { ...project.settings, projectName: project.name };
+      project.updatedAt = Date.now();
+      await saveProjectSession(project);
+      if (project.id === activeProjectId) {
+        state.projectName = project.name;
+        projectName.textContent = project.name;
+        projectName.setAttribute('aria-label', `${project.name}. Open project library`);
+        lastProjectFingerprint = currentProjectFingerprint();
+      }
+    }
+    renderProjectLibrary();
+  };
+  input.addEventListener('blur', () => finish(true), { once: true });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
     if (event.key === 'Escape') { event.preventDefault(); finish(false); }
-  };
-  projectName.addEventListener('blur', onBlur, { once: true });
-  projectName.addEventListener('keydown', onEditKeydown);
+  });
+}
+
+async function duplicateLibraryProject(projectId) {
+  const source = projectCache.find((project) => project.id === projectId);
+  if (!source) return;
+  const duplicate = duplicateProjectRecord(source, projectCache.map((project) => project.name));
+  await saveProjectSession(duplicate, { createRecovery: false });
+  projectCache.unshift(duplicate);
+  renderProjectLibrary();
+  toast(`${duplicate.name} created`, 'success');
+}
+
+async function requestDeleteLibraryProject(projectId) {
+  if (pendingDeleteProjectId !== projectId) {
+    pendingDeleteProjectId = projectId;
+    clearTimeout(pendingDeleteTimer);
+    pendingDeleteTimer = window.setTimeout(() => {
+      pendingDeleteProjectId = null;
+      renderProjectLibrary();
+    }, 4200);
+    renderProjectLibrary();
+    announce('Press Confirm delete to remove this session');
+    return;
+  }
+  clearTimeout(pendingDeleteTimer);
+  pendingDeleteProjectId = null;
+  await deleteProjectSession(projectId);
+  projectCache = projectCache.filter((project) => project.id !== projectId);
+  if (projectId === activeProjectId) await loadProjectIntoStudio(projectCache[0] ?? null);
+  renderProjectLibrary();
+  toast('Session deleted from this device');
+}
+
+async function exportCurrentProject() {
+  if (!activeProjectId) return;
+  showProjectError();
+  try {
+    const project = await flushProjectSave();
+    const bundle = await serializeProjectBundle(project);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([bundle], { type: 'application/json' }));
+    link.download = projectFileName(project.name);
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    toast(`${link.download} exported`, 'success');
+  } catch (error) {
+    showProjectError(error.message);
+  }
+}
+
+async function saveImportedProject(project, { replace = null } = {}) {
+  const imported = replace ? {
+    ...project,
+    id: replace.id,
+    name: replace.name,
+    createdAt: replace.createdAt,
+    settings: { ...project.settings, projectName: replace.name },
+  } : project;
+  await saveProjectSession(imported, { createRecovery: Boolean(replace) });
+  await refreshProjectCache();
+  await loadProjectIntoStudio(imported);
+  projectConflict.classList.remove('open');
+  pendingImportedProject = null;
+  toast(`${imported.name} imported`, 'success');
+}
+
+async function importProjectBundle(file) {
+  showProjectError();
+  try {
+    const imported = parseProjectBundle(await file.text(), { existingNames: [] });
+    const conflict = projectCache.find((project) => project.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase());
+    if (conflict) {
+      pendingImportedProject = { imported, conflict };
+      document.getElementById('project-conflict-copy').textContent = `“${imported.name}” already exists. Keep a separate copy or replace the local session.`;
+      projectConflict.classList.add('open');
+      return;
+    }
+    await saveImportedProject(imported);
+  } catch (error) {
+    showProjectError(error.message);
+  }
 }
 
 function wireEvents() {
@@ -1312,16 +1753,65 @@ function wireEvents() {
   inputRecord.addEventListener('click', toggleInputRecording);
   exportButton.addEventListener('click', exportLoop);
   shareButton.addEventListener('click', shareStudio);
+  projectName.addEventListener('click', openProjectLibrary);
+  document.getElementById('close-project-sheet')?.addEventListener('click', closeProjectLibrary);
+  projectScrim?.addEventListener('click', closeProjectLibrary);
+  projectSearch?.addEventListener('input', renderProjectLibrary);
+  document.getElementById('new-project')?.addEventListener('click', () => {
+    newProjectForm.classList.add('open');
+    newProjectName.value = '';
+    newProjectName.focus();
+  });
+  document.getElementById('cancel-new-project')?.addEventListener('click', () => newProjectForm.classList.remove('open'));
+  newProjectForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await createNewProject(newProjectName.value);
+  });
+  document.getElementById('import-project')?.addEventListener('click', () => importProjectFile.click());
+  document.getElementById('export-project')?.addEventListener('click', exportCurrentProject);
+  importProjectFile?.addEventListener('change', async () => {
+    if (importProjectFile.files[0]) await importProjectBundle(importProjectFile.files[0]);
+    importProjectFile.value = '';
+  });
+  projectList?.addEventListener('click', async (event) => {
+    const actionButton = event.target.closest('[data-project-action]');
+    const item = actionButton?.closest('[data-project-id]');
+    if (!actionButton || !item) return;
+    const projectId = item.dataset.projectId;
+    if (actionButton.dataset.projectAction === 'open') {
+      await flushProjectSave();
+      await loadProjectIntoStudio(projectCache.find((project) => project.id === projectId));
+      closeProjectLibrary();
+    }
+    if (actionButton.dataset.projectAction === 'rename') beginLibraryRename(projectId);
+    if (actionButton.dataset.projectAction === 'duplicate') await duplicateLibraryProject(projectId);
+    if (actionButton.dataset.projectAction === 'delete') await requestDeleteLibraryProject(projectId);
+  });
+  document.getElementById('restore-project')?.addEventListener('click', async () => {
+    const recovery = await loadProjectRecovery(activeProjectId);
+    if (!recovery) return;
+    recovery.updatedAt = Date.now();
+    await saveProjectSession(recovery, { createRecovery: true });
+    await refreshProjectCache();
+    await loadProjectIntoStudio(recovery);
+    toast('Previous save restored. The newer save remains recoverable.', 'success');
+  });
+  document.getElementById('project-keep-both')?.addEventListener('click', async () => {
+    if (!pendingImportedProject) return;
+    pendingImportedProject.imported.name = uniqueProjectName(pendingImportedProject.imported.name, projectCache.map((project) => project.name));
+    pendingImportedProject.imported.settings.projectName = pendingImportedProject.imported.name;
+    await saveImportedProject(pendingImportedProject.imported);
+  });
+  document.getElementById('project-replace')?.addEventListener('click', async () => {
+    if (pendingImportedProject) await saveImportedProject(pendingImportedProject.imported, { replace: pendingImportedProject.conflict });
+  });
+  document.getElementById('project-conflict-cancel')?.addEventListener('click', () => {
+    pendingImportedProject = null;
+    projectConflict.classList.remove('open');
+  });
   clearOverdubsButton?.addEventListener('click', clearAllOverdubs);
   undoButton.addEventListener('click', undo);
   redoButton.addEventListener('click', redo);
-  projectName.addEventListener('dblclick', beginProjectRename);
-  projectName.addEventListener('keydown', (event) => {
-    if ((event.key === 'Enter' || event.key === ' ') && projectName.contentEditable !== 'true') {
-      event.preventDefault();
-      beginProjectRename();
-    }
-  });
 
   monitorButton.addEventListener('click', async () => {
     const enabled = monitorButton.getAttribute('aria-pressed') !== 'true';
@@ -1507,7 +1997,10 @@ function wireEvents() {
       handle.removeEventListener('pointerup', finish);
       handle.removeEventListener('pointercancel', finish);
       const record = recordedPads.get(activeSampleSlot);
-      if (record) await saveRecordedPad(record);
+      if (record) {
+        await saveRecordedPad(record);
+        persist();
+      }
       announce('Trim updated');
     };
     handle.addEventListener('pointermove', move);
@@ -1556,6 +2049,11 @@ function wireEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && projectSheet?.classList.contains('open')) {
+      event.preventDefault();
+      closeProjectLibrary();
+      return;
+    }
     if (event.key === 'Escape' && sampleSheet?.classList.contains('open')) {
       event.preventDefault();
       closeSampleEditor();
@@ -1613,28 +2111,16 @@ async function restoreRecordings() {
   }
 }
 
-function initialize() {
+async function initialize() {
   decoratePadShells();
   decorateTrackControls();
-  history = [sequenceSnapshot()];
-  historyIndex = 0;
-  bpmInput.value = String(state.bpm);
-  metronomeButton.setAttribute('aria-pressed', String(state.metronome));
-  countInButton.setAttribute('aria-pressed', String(state.countIn));
-  countInButton.textContent = state.countIn ? 'Count-in · 1 bar' : 'Count-in · off';
-  quantizeSelect.value = state.quantize;
-  document.querySelector('.transport-right .readout-value').textContent = state.quantize;
-  projectName.textContent = state.projectName;
-  projectName.tabIndex = 0;
-  projectName.setAttribute('role', 'button');
-  projectName.setAttribute('aria-label', `${state.projectName}. Rename project`);
-  renderBankButtons();
-  renderPads();
-  renderTrackStates();
-  renderSequencer();
-  renderHistoryControls();
+  await initializeProjectSession();
   wireEvents();
-  restoreRecordings();
 }
 
-initialize();
+initialize().catch((error) => {
+  console.error(error);
+  renderStudioState();
+  wireEvents();
+  toast('Local project storage is unavailable. This session will remain open until you close the tab.', 'error', 6400);
+});

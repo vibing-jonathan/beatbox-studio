@@ -190,7 +190,8 @@
       font: 800 13px/1 var(--font-display);
     }
     .brand-name { font: 700 13px/1 var(--font-display); letter-spacing: -.02em; }
-    .project-name { color: var(--muted); margin-left: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-name { min-width: 0; min-height: 36px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); margin-left: -7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; text-align: left; }
+    .project-name:hover { color: var(--fg); border-color: var(--border); background: var(--surface-raised); }
     .project-name::before { content: "/"; margin-right: 10px; color: var(--border-strong); }
     .save-state { gap: 7px; color: var(--muted); font-size: 12px; justify-self: center; }
     .save-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
@@ -441,7 +442,6 @@
     .clear-overdubs:disabled, .track-clear:disabled { opacity: .42; cursor: not-allowed; }
     .input-record.recording { animation: recording-pulse 1.2s ease-in-out infinite; }
     @keyframes recording-pulse { 50% { box-shadow: 0 0 0 8px var(--record-halo); } }
-    .project-name[contenteditable="true"] { min-width: 140px; padding: 6px 8px; margin-left: -6px; border-radius: 7px; background: var(--surface-raised); box-shadow: var(--focus); color: var(--fg); }
     .save-state.is-saving .save-dot { background: var(--warning); }
     .toast-stack {
       position: fixed; z-index: 100; right: 20px; bottom: 102px;
@@ -458,6 +458,48 @@
     .toast-success { border-color: var(--success); }
     .toast-error, .toast-record { border-color: var(--record); }
     .export-button[aria-busy="true"] { cursor: progress; }
+
+    .project-scrim { position: fixed; inset: 0; z-index: 51; background: oklch(5% .01 255 / .56); opacity: 0; pointer-events: none; transition: opacity 160ms; }
+    .project-scrim.open { opacity: 1; pointer-events: auto; }
+    .project-sheet { position: fixed; z-index: 52; inset: 0 0 0 auto; width: min(460px, 100%); height: 100dvh; padding: 0 18px 24px; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--border-strong); box-shadow: -24px 0 60px var(--sheet-shadow); transform: translateX(102%); transition: transform 180ms cubic-bezier(.2,.8,.2,1); }
+    .project-sheet.open { transform: translateX(0); }
+    .project-sheet-head { min-height: 68px; position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; background: var(--surface); border-bottom: 1px solid var(--border); }
+    .project-sheet-title { min-width: 0; flex: 1; }
+    .project-sheet-title strong { display: block; font: 700 18px/1.2 var(--font-display); }
+    .project-sheet-title span { color: var(--muted); font: 11px/1.4 var(--font-mono); }
+    .project-toolbar { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 16px 0 10px; }
+    .project-search, .project-inline-form input, .project-rename-input { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: 9px; padding: 0 11px; background: var(--surface-raised); color: var(--fg); }
+    .project-action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+    .project-action-row button, .project-inline-form button, .project-item button { min-height: 44px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); color: var(--fg); cursor: pointer; }
+    .project-action-row .primary, .project-inline-form .primary { background: var(--accent); border-color: var(--accent-border); color: var(--accent-ink); font-weight: 700; }
+    .project-inline-form { display: none; grid-template-columns: 1fr 86px 80px; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .project-inline-form.open { display: grid; }
+    .project-error, .project-recovery { display: none; margin: 12px 0 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); font-size: 12px; line-height: 1.45; }
+    .project-error.open, .project-recovery.open { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .project-error { border-color: var(--record); color: var(--record); }
+    .project-recovery button { flex: 0 0 auto; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); }
+    .project-list-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0 8px; }
+    .project-list-head strong { font: 700 13px var(--font-display); }
+    .project-list-head span { color: var(--muted); font: 10px var(--font-mono); }
+    .project-list { display: grid; gap: 8px; }
+    .project-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-raised); }
+    .project-item.active { border-color: var(--functional); box-shadow: inset 3px 0 0 var(--functional); }
+    .project-item-main { min-width: 0; }
+    .project-item-title { display: flex; align-items: center; gap: 7px; }
+    .project-item-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 13px var(--font-display); }
+    .project-active-chip { flex: 0 0 auto; color: var(--functional); font: 700 9px var(--font-mono); }
+    .project-item-meta { margin-top: 5px; color: var(--muted); font: 10px/1.4 var(--font-mono); }
+    .project-item-actions { display: flex; gap: 5px; }
+    .project-item-actions button { min-width: 44px; padding: 0 9px; font-size: 11px; }
+    .project-item-actions .danger { color: var(--record); }
+    .project-item-actions .confirm { border-color: var(--record); background: var(--record-soft); }
+    .project-empty { padding: 32px 18px; border: 1px dashed var(--border-strong); border-radius: 11px; color: var(--muted); text-align: center; line-height: 1.5; }
+    .project-empty strong { display: block; margin-bottom: 4px; color: var(--fg); font-family: var(--font-display); }
+    .project-conflict { display: none; margin-top: 12px; padding: 12px; border: 1px solid var(--warning); border-radius: 10px; background: var(--surface-raised); }
+    .project-conflict.open { display: block; }
+    .project-conflict p { margin: 0 0 10px; font-size: 12px; line-height: 1.45; }
+    .project-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .project-conflict-actions button { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); }
 
     .sample-scrim { position: fixed; inset: 0; z-index: 49; background: oklch(5% .01 255 / .56); opacity: 0; pointer-events: none; transition: opacity 160ms; }
     .sample-scrim.open { opacity: 1; pointer-events: auto; }
@@ -554,6 +596,13 @@
       .sample-sheet { top: auto; bottom: 0; width: 100%; height: min(82dvh, 690px); padding-inline: 16px; border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 18px 18px 0 0; transform: translateY(102%); }
       .sample-sheet::before { content: ""; display: block; position: sticky; top: 7px; z-index: 5; width: 42px; height: 4px; margin: 7px auto -11px; border-radius: 9px; background: var(--border-strong); }
       .sample-sheet.open { transform: translateY(0); }
+      .project-sheet { inset: auto 0 0; width: 100%; height: min(88dvh, 760px); padding-inline: 16px; border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 18px 18px 0 0; transform: translateY(102%); }
+      .project-sheet::before { content: ""; display: block; position: sticky; top: 7px; z-index: 5; width: 42px; height: 4px; margin: 7px auto -11px; border-radius: 9px; background: var(--border-strong); }
+      .project-sheet.open { transform: translateY(0); }
+      .project-inline-form { grid-template-columns: 1fr 72px; }
+      .project-inline-form input { grid-column: 1 / -1; }
+      .project-item { grid-template-columns: 1fr; }
+      .project-item-actions { justify-content: flex-start; overflow-x: auto; }
     }
 
     @media (max-width: 380px) {
@@ -577,7 +626,7 @@
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true">BS</div>
         <span class="brand-name">Beatbox Studio</span>
-        <span class="project-name" data-od-id="project-name">Basement Cypher 03</span>
+        <button class="project-name" id="project-library-trigger" type="button" data-od-id="project-name" aria-haspopup="dialog" aria-controls="project-sheet">Basement Cypher 03</button>
       </div>
       <div class="save-state" role="status" aria-live="polite" data-od-id="save-state"><span class="save-dot"></span>Saved just now</div>
       <div class="session-actions">
@@ -724,6 +773,38 @@
       </div>
     </footer>
   </main>
+
+  <div class="project-scrim" id="project-scrim"></div>
+  <aside class="project-sheet" id="project-sheet" aria-labelledby="project-sheet-heading" aria-hidden="true" data-od-id="project-library-sheet">
+    <div class="project-sheet-head">
+      <div class="project-sheet-title"><strong id="project-sheet-heading">Your sessions</strong><span>Saved locally on this device</span></div>
+      <button class="icon-button" id="close-project-sheet" type="button" aria-label="Close project library">×</button>
+    </div>
+    <div class="project-toolbar">
+      <label class="sr-only" for="project-search">Search sessions</label>
+      <input class="project-search" id="project-search" type="search" placeholder="Search sessions" autocomplete="off">
+      <button class="tool-button" id="new-project" type="button">New</button>
+    </div>
+    <div class="project-action-row">
+      <button id="import-project" type="button">Import .beatbox</button>
+      <button id="export-project" type="button">Export current</button>
+      <input class="sr-only" id="import-project-file" type="file" accept=".beatbox,application/json">
+    </div>
+    <form class="project-inline-form" id="new-project-form">
+      <label class="sr-only" for="new-project-name">New session name</label>
+      <input id="new-project-name" maxlength="48" placeholder="Untitled session" required>
+      <button class="primary" type="submit">Create</button>
+      <button id="cancel-new-project" type="button">Cancel</button>
+    </form>
+    <div class="project-recovery" id="project-recovery"><span>A previous save is available.</span><button id="restore-project" type="button">Restore previous</button></div>
+    <div class="project-error" id="project-error" role="alert"></div>
+    <div class="project-conflict" id="project-conflict" role="alertdialog" aria-labelledby="project-conflict-copy">
+      <p id="project-conflict-copy">A session with this name already exists.</p>
+      <div class="project-conflict-actions"><button id="project-keep-both" type="button">Keep both</button><button id="project-replace" type="button">Replace</button><button id="project-conflict-cancel" type="button">Cancel</button></div>
+    </div>
+    <div class="project-list-head"><strong>Recent projects</strong><span id="project-count">0 SESSIONS</span></div>
+    <div class="project-list" id="project-list"></div>
+  </aside>
 
   <div class="sample-scrim" id="sample-scrim"></div>
   <aside class="sample-sheet" id="sample-sheet" aria-labelledby="sample-sheet-heading" aria-hidden="true" data-od-id="sample-editor-sheet">
