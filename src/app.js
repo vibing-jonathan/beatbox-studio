@@ -32,6 +32,7 @@ import {
   trackIdForType,
 } from './sequencer.js';
 import { findNextEmptySlot, normalizationGainDb, remapPatternEventSlots, waveformPeaks } from './sample-editor.js';
+import { normalizeChannelMixer, normalizeMasterMixer, panLabel, resetChannelEffects } from './mixer.js';
 
 const engine = new AudioEngine();
 const padElements = [...document.querySelectorAll('.pad')];
@@ -104,6 +105,13 @@ const pitchInput = document.getElementById('sample-pitch');
 const reverseButton = document.getElementById('sample-reverse');
 const playbackModes = document.getElementById('sample-playback-mode');
 const moveTargetSelect = document.getElementById('move-target');
+const workspace = document.querySelector('.workspace');
+const mixerView = document.getElementById('mixer-view');
+const mixerRail = document.getElementById('mixer-rail');
+const effectsInspector = document.getElementById('effects-inspector');
+const effectsHeading = document.getElementById('effects-heading');
+const effectsBypass = document.getElementById('effects-bypass');
+const studioViewButtons = [...document.querySelectorAll('[data-studio-view]')];
 
 const KEYS = ['1', '2', '3', '4', 'q', 'w', 'e', 'r', 'a', 's', 'd', 'f'];
 const BANKS = {
@@ -137,13 +145,13 @@ const state = {
   countIn: stored.countIn ?? true,
   quantize: stored.quantize ?? '1/16',
   projectName: stored.projectName || 'Basement Cypher 03',
-  trackStates: TRACKS.map((track, index) => ({
+  trackStates: TRACKS.map((track, index) => normalizeChannelMixer(stored.trackStates?.[index], {
     id: track.id,
-    volume: clamp(Number(stored.trackStates?.[index]?.volume) || Number(trackElements[index]?.querySelector('.volume')?.value) || 75, 0, 100),
-    muted: Boolean(stored.trackStates?.[index]?.muted),
-    solo: Boolean(stored.trackStates?.[index]?.solo),
-    cleared: Boolean(stored.trackStates?.[index]?.cleared),
+    volume: Number(trackElements[index]?.querySelector('.volume')?.value) || 75,
   })),
+  masterMixer: normalizeMasterMixer(stored.masterMixer),
+  studioView: stored.studioView === 'mix' ? 'mix' : 'sequence',
+  selectedMixerTrackId: TRACKS.some((track) => track.id === stored.selectedMixerTrackId) ? stored.selectedMixerTrackId : TRACKS[0].id,
   loopBars: [1, 2, 4, 8].includes(Number(stored.loopBars)) ? Number(stored.loopBars) : 4,
   patterns: initialPatterns.patterns,
   activePatternId: initialPatterns.activePatternId,
@@ -188,6 +196,7 @@ let pendingDeleteProjectId = null;
 let pendingDeleteTimer = null;
 let pendingImportedProject = null;
 let lastProjectFingerprint = '';
+let mixerMeterFrame = null;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -278,6 +287,9 @@ function currentSettings() {
     quantize: state.quantize,
     projectName: state.projectName,
     trackStates: state.trackStates,
+    masterMixer: state.masterMixer,
+    studioView: state.studioView,
+    selectedMixerTrackId: state.selectedMixerTrackId,
     loopBars: state.loopBars,
     patterns: state.patterns,
     activePatternId: state.activePatternId,
@@ -292,13 +304,13 @@ function applyStoredSettings(settings = {}) {
   state.countIn = settings.countIn ?? true;
   state.quantize = ['1/16', '1/8 swing', '1/8', 'Off'].includes(settings.quantize) ? settings.quantize : '1/16';
   state.projectName = cleanProjectName(settings.projectName, 'Untitled session');
-  state.trackStates = TRACKS.map((track, index) => ({
+  state.trackStates = TRACKS.map((track, index) => normalizeChannelMixer(settings.trackStates?.[index], {
     id: track.id,
-    volume: clamp(Number(settings.trackStates?.[index]?.volume) || Number(trackElements[index]?.querySelector('.volume')?.value) || 75, 0, 100),
-    muted: Boolean(settings.trackStates?.[index]?.muted),
-    solo: Boolean(settings.trackStates?.[index]?.solo),
-    cleared: Boolean(settings.trackStates?.[index]?.cleared),
+    volume: Number(trackElements[index]?.querySelector('.volume')?.value) || 75,
   }));
+  state.masterMixer = normalizeMasterMixer(settings.masterMixer);
+  state.studioView = settings.studioView === 'mix' ? 'mix' : 'sequence';
+  state.selectedMixerTrackId = TRACKS.some((track) => track.id === settings.selectedMixerTrackId) ? settings.selectedMixerTrackId : TRACKS[0].id;
   state.loopBars = [1, 2, 4, 8].includes(Number(settings.loopBars)) ? Number(settings.loopBars) : 4;
   state.patterns = patterns.patterns;
   state.activePatternId = patterns.activePatternId;
@@ -474,6 +486,95 @@ function renderTrackStates() {
     clearButton.setAttribute('aria-label', `${trackState.cleared ? 'Restore' : 'Clear'} ${TRACKS[index].id} track`);
     clearButton.title = trackState.cleared ? 'Restore track' : 'Clear track';
   });
+  engine.configureMixer(state.trackStates, state.masterMixer);
+}
+
+function effectValueLabel(key, value) {
+  if (['eqLow', 'eqMid', 'eqHigh', 'compThreshold'].includes(key)) return `${Number(value) > 0 ? '+' : ''}${value} dB`;
+  if (key === 'compRatio') return `${value}:1`;
+  return `${value}%`;
+}
+
+function renderEffectsInspector() {
+  const channel = state.trackStates.find((track) => track.id === state.selectedMixerTrackId) ?? state.trackStates[0];
+  const track = TRACKS.find((candidate) => candidate.id === channel.id) ?? TRACKS[0];
+  effectsHeading.textContent = track.name;
+  effectsBypass.setAttribute('aria-pressed', String(channel.bypass));
+  effectsBypass.textContent = channel.bypass ? 'Bypassed' : 'Bypass';
+  effectsInspector.querySelectorAll('[data-effect]').forEach((input) => {
+    input.value = String(channel[input.dataset.effect]);
+    input.disabled = false;
+  });
+  effectsInspector.querySelectorAll('[data-effect-output]').forEach((output) => {
+    const key = output.dataset.effectOutput;
+    output.value = effectValueLabel(key, channel[key]);
+    output.textContent = output.value;
+  });
+}
+
+function channelStripMarkup(track, channel) {
+  return `<section class="channel-strip${channel.id === state.selectedMixerTrackId ? ' selected' : ''}" data-mixer-track="${channel.id}" aria-label="${track.name} channel">
+    <div class="channel-name"><strong>${track.name}</strong><span>${channel.bypass ? 'FX BYPASSED' : 'CHANNEL'}</span></div>
+    <div class="channel-actions"><button type="button" data-mixer-action="mute" aria-pressed="${channel.muted}" aria-label="Mute ${track.name}">M</button><button type="button" data-mixer-action="solo" aria-pressed="${channel.solo}" aria-label="Solo ${track.name}">S</button></div>
+    <div class="channel-fader-zone"><span class="channel-meter" data-meter="left" aria-hidden="true"></span><span class="channel-meter" data-meter="right" aria-hidden="true"></span><input class="channel-fader" data-mixer-volume type="range" min="0" max="100" value="${channel.volume}" aria-orientation="vertical" aria-label="${track.name} mixer volume"></div>
+    <div><div class="channel-value"><output data-volume-output>${Math.round(channel.volume)}%</output></div><label class="pan-row"><span class="sr-only">${track.name} pan</span><input data-mixer-pan type="range" min="-100" max="100" value="${channel.pan}" aria-label="${track.name} pan"><output data-pan-output>${panLabel(channel.pan)}</output></label></div>
+    <button class="channel-fx" type="button" data-mixer-action="effects">Effects</button>
+  </section>`;
+}
+
+function masterStripMarkup() {
+  const master = state.masterMixer;
+  return `<section class="channel-strip master" data-master-strip aria-label="Master channel">
+    <div class="channel-name"><strong>Master</strong><span>OUTPUT</span></div>
+    <div class="channel-actions"><button type="button" data-master-limiter aria-pressed="${master.limiter}">Limiter</button><button type="button" disabled>−1 dB</button></div>
+    <div class="channel-fader-zone"><span class="channel-meter" data-master-meter="left" aria-hidden="true"></span><span class="channel-meter" data-master-meter="right" aria-hidden="true"></span><input class="channel-fader" data-master-volume type="range" min="0" max="100" value="${master.volume}" aria-orientation="vertical" aria-label="Master volume"></div>
+    <div><div class="channel-value"><output data-master-volume-output>${Math.round(master.volume)}%</output></div><label class="pan-row"><span class="sr-only">Master balance</span><input data-master-balance type="range" min="-100" max="100" value="${master.balance}" aria-label="Master balance"><output data-master-balance-output>${panLabel(master.balance)}</output></label></div>
+    <div class="master-status" id="master-status" role="status" aria-live="polite">LIMITER READY · −1 dB CEILING</div>
+  </section>`;
+}
+
+function renderMixer() {
+  mixerRail.innerHTML = `${TRACKS.map((track, index) => channelStripMarkup(track, state.trackStates[index])).join('')}${masterStripMarkup()}`;
+  renderEffectsInspector();
+  engine.configureMixer(state.trackStates, state.masterMixer);
+}
+
+function updateMixerMeters() {
+  if (state.studioView !== 'mix') {
+    mixerMeterFrame = null;
+    return;
+  }
+  state.trackStates.forEach((channel) => {
+    const level = engine.getTrackLevel(channel.id);
+    const percent = `${clamp(((level + 60) / 60) * 100, 3, 100)}%`;
+    const strip = mixerRail.querySelector(`[data-mixer-track="${channel.id}"]`);
+    strip?.querySelectorAll('.channel-meter').forEach((meterElement) => meterElement.style.setProperty('--level', percent));
+  });
+  const masterLevel = engine.getMasterLevel();
+  const masterPercent = `${clamp(((masterLevel + 60) / 60) * 100, 3, 100)}%`;
+  mixerRail.querySelectorAll('[data-master-meter]').forEach((meterElement) => meterElement.style.setProperty('--level', masterPercent));
+  const masterStatus = document.getElementById('master-status');
+  if (masterStatus) {
+    masterStatus.classList.toggle('clipping', masterLevel > -0.5);
+    masterStatus.textContent = masterLevel > -0.5 ? 'CLIPPING · LOWER MASTER' : `${state.masterMixer.limiter ? 'LIMITER READY' : 'LIMITER OFF'} · ${state.masterMixer.ceiling} dB CEILING`;
+  }
+  mixerMeterFrame = requestAnimationFrame(updateMixerMeters);
+}
+
+function setStudioView(view, { save = true } = {}) {
+  state.studioView = view === 'mix' ? 'mix' : 'sequence';
+  workspace.classList.toggle('is-hidden', state.studioView === 'mix');
+  mixerView.classList.toggle('active', state.studioView === 'mix');
+  studioViewButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.studioView === state.studioView)));
+  if (state.studioView === 'mix') {
+    renderMixer();
+    if (!mixerMeterFrame) mixerMeterFrame = requestAnimationFrame(updateMixerMeters);
+  } else if (mixerMeterFrame) {
+    cancelAnimationFrame(mixerMeterFrame);
+    mixerMeterFrame = null;
+  }
+  if (save) persist();
+  announce(`${state.studioView === 'mix' ? 'Mix' : 'Sequence'} view active`);
 }
 
 function selectedEvents() {
@@ -619,6 +720,10 @@ function eventLoopPosition(event) {
   return normalizeLoopPosition(event.step + eventOffsetSteps(event), loopSteps());
 }
 
+function mixerTrackForSlot(slot, fallbackType = 'hat') {
+  return state.patterns.flatMap((pattern) => pattern.events).find((event) => event.slot === slot)?.trackId ?? trackIdForType(fallbackType);
+}
+
 function scheduleStep(step, when) {
   const hitTime = when + swingDelayForStep(step);
   const secondsPerStep = 60 / state.bpm / 4;
@@ -626,10 +731,11 @@ function scheduleStep(step, when) {
     const trackIndex = TRACKS.findIndex((track) => track.id === event.trackId);
     if (trackIndex < 0 || !activeTrack(trackIndex)) continue;
     const eventTime = when + eventOffsetSteps(event) * secondsPerStep;
-    const gain = event.velocity * (state.trackStates[trackIndex].volume / 100);
+    const gain = event.velocity;
+    const destination = engine.trackDestination(event.trackId);
     const recording = event.recorded ? recordedPads.get(event.slot) : null;
-    if (recording && engine.playRecording(event.slot, { when: eventTime, gain, sample: recording, loop: false })) continue;
-    engine.play(event.type, { when: eventTime || hitTime, gain });
+    if (recording && engine.playRecording(event.slot, { when: eventTime, gain, sample: recording, loop: false, destination })) continue;
+    engine.play(event.type, { when: eventTime || hitTime, gain, destination });
   }
   if (state.metronome && step % 4 === 0) engine.play('click', { when, gain: step % 16 === 0 ? 0.32 : 0.18 });
   if (pendingRecordSteps > 0) {
@@ -774,6 +880,10 @@ async function triggerPad(pad, velocity = 1) {
     return;
   }
   const padTime = engine.currentTime;
+  const padIndex = padElements.indexOf(pad);
+  const fallbackType = BANKS[state.activeBank][padIndex]?.[1] ?? definition.type;
+  const mixerTrackId = mixerTrackForSlot(definition.slot, fallbackType);
+  const destination = engine.trackDestination(mixerTrackId);
   const recording = definition.recorded ? recordedPads.get(definition.slot) : null;
   const mode = recording ? sampleSettings(recording).mode : 'one-shot';
   if (activePadPlaybacks.has(definition.slot) && (mode === 'gate' || mode === 'loop')) return;
@@ -781,10 +891,11 @@ async function triggerPad(pad, velocity = 1) {
     when: padTime,
     gain: velocity,
     sample: recording,
+    destination,
     onEnded: () => activePadPlaybacks.delete(definition.slot),
   });
   if (played && (mode === 'gate' || mode === 'loop')) activePadPlaybacks.set(definition.slot, played);
-  if (!played) engine.play(definition.type, { when: padTime, gain: velocity });
+  if (!played) engine.play(definition.type, { when: padTime, gain: velocity, destination });
   pad.classList.add('is-hit');
   window.setTimeout(() => pad.classList.remove('is-hit'), 120);
   if (isLoopRecording) {
@@ -792,7 +903,7 @@ async function triggerPad(pad, velocity = 1) {
     const event = {
       ...timing,
       id: makeEventId('overdub'),
-      trackId: trackIdForType(definition.type),
+      trackId: mixerTrackId,
       velocity,
       origin: 'overdub',
       quantize: state.quantize,
@@ -1006,8 +1117,9 @@ function collectLoopEvents(includeRecorded = true) {
       type: event.type,
       buffer,
       sample: recording,
+      trackId: event.trackId,
       time: eventLoopPosition(event) * secondsPerStep,
-      gain: event.velocity * (state.trackStates[trackIndex].volume / 100),
+      gain: event.velocity,
     });
   });
   return events;
@@ -1019,16 +1131,22 @@ async function exportLoop() {
   exportButton.lastChild.textContent = 'Rendering…';
   try {
     await engine.ensureReady();
-    const buffer = await engine.renderLoop({ bpm: state.bpm, events: collectLoopEvents(), bars: state.loopBars });
+    const buffer = await engine.renderLoop({
+      bpm: state.bpm,
+      events: collectLoopEvents(),
+      bars: state.loopBars,
+      channels: state.trackStates,
+      master: state.masterMixer,
+    });
     const wav = audioBufferToWav(buffer);
     const url = URL.createObjectURL(wav);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `${state.projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'beatbox-loop'}.wav`;
     anchor.click();
-    URL.revokeObjectURL(url);
-    toast(`${state.loopBars}-bar WAV exported`, 'success');
-    announce('Loop export complete');
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`${state.loopBars}-bar WAV exported with mixer effects`, 'success');
+    announce('Loop export complete with mixer effects rendered');
   } catch (error) {
     toast(`Export failed: ${error.message}`, 'error', 5200);
   } finally {
@@ -1184,6 +1302,10 @@ function renderSampleEditor() {
     loop: 'Repeats the trimmed sound while you hold the pad.',
   };
   document.getElementById('sample-mode-hint').textContent = hints[settings.mode];
+  const linkedTrackId = mixerTrackForSlot(record.slot, BANKS[record.slot.split(':')[0]]?.[KEYS.indexOf(record.slot.split(':')[1])]?.[1] ?? 'hat');
+  const linkedTrack = TRACKS.find((track) => track.id === linkedTrackId);
+  const effectsLink = document.getElementById('edit-pad-effects');
+  if (effectsLink) effectsLink.textContent = `Edit ${linkedTrack?.name ?? 'channel'} effects in Mix`;
   populateMoveTargets();
 }
 
@@ -1345,13 +1467,13 @@ function defaultProjectSettings(name = 'Untitled session') {
     countIn: true,
     quantize: '1/16',
     projectName: cleanProjectName(name),
-    trackStates: TRACKS.map((track, index) => ({
+    trackStates: TRACKS.map((track, index) => normalizeChannelMixer({}, {
       id: track.id,
       volume: Number(trackElements[index]?.querySelector('.volume')?.defaultValue) || 75,
-      muted: false,
-      solo: false,
-      cleared: false,
     })),
+    masterMixer: normalizeMasterMixer(),
+    studioView: 'sequence',
+    selectedMixerTrackId: TRACKS[0].id,
     loopBars: 4,
     patterns: [{ id: 'pattern-1', name: 'Pattern 1', events: [] }],
     activePatternId: 'pattern-1',
@@ -1375,6 +1497,8 @@ function renderStudioState() {
   renderTrackStates();
   renderSequencer();
   renderHistoryControls();
+  renderMixer();
+  setStudioView(state.studioView, { save: false });
 }
 
 function formatProjectAge(timestamp) {
@@ -1700,6 +1824,81 @@ function wireEvents() {
     if (activeSampleSlot) renderSampleEditor();
     announce(`${next === 'light' ? 'Light' : 'Dark'} theme active`);
   });
+  studioViewButtons.forEach((button) => button.addEventListener('click', () => setStudioView(button.dataset.studioView)));
+
+  mixerRail?.addEventListener('click', (event) => {
+    const strip = event.target.closest('[data-mixer-track]');
+    const action = event.target.closest('[data-mixer-action]')?.dataset.mixerAction;
+    if (strip && action) {
+      const channel = state.trackStates.find((track) => track.id === strip.dataset.mixerTrack);
+      state.selectedMixerTrackId = channel.id;
+      if (action === 'mute') channel.muted = !channel.muted;
+      if (action === 'solo') channel.solo = !channel.solo;
+      renderTrackStates();
+      renderMixer();
+      persist();
+      announce(`${TRACKS.find((track) => track.id === channel.id)?.name} ${action === 'effects' ? 'effects selected' : `${action} ${channel[action === 'mute' ? 'muted' : 'solo'] ? 'on' : 'off'}`}`);
+      return;
+    }
+    const limiter = event.target.closest('[data-master-limiter]');
+    if (limiter) {
+      state.masterMixer.limiter = !state.masterMixer.limiter;
+      renderMixer();
+      persist();
+      announce(`Master limiter ${state.masterMixer.limiter ? 'on' : 'off'}`);
+    }
+  });
+  mixerRail?.addEventListener('input', (event) => {
+    const strip = event.target.closest('[data-mixer-track]');
+    if (strip) {
+      const channel = state.trackStates.find((track) => track.id === strip.dataset.mixerTrack);
+      if (event.target.matches('[data-mixer-volume]')) {
+        channel.volume = Number(event.target.value);
+        strip.querySelector('[data-volume-output]').textContent = `${Math.round(channel.volume)}%`;
+        const trackIndex = state.trackStates.indexOf(channel);
+        trackElements[trackIndex].querySelector('.volume').value = String(channel.volume);
+      }
+      if (event.target.matches('[data-mixer-pan]')) {
+        channel.pan = Number(event.target.value);
+        strip.querySelector('[data-pan-output]').textContent = panLabel(channel.pan);
+      }
+    }
+    if (event.target.matches('[data-master-volume]')) {
+      state.masterMixer.volume = Number(event.target.value);
+      mixerRail.querySelector('[data-master-volume-output]').textContent = `${Math.round(state.masterMixer.volume)}%`;
+    }
+    if (event.target.matches('[data-master-balance]')) {
+      state.masterMixer.balance = Number(event.target.value);
+      mixerRail.querySelector('[data-master-balance-output]').textContent = panLabel(state.masterMixer.balance);
+    }
+    engine.configureMixer(state.trackStates, state.masterMixer);
+    persist();
+  });
+  effectsInspector?.addEventListener('input', (event) => {
+    const key = event.target.dataset.effect;
+    if (!key) return;
+    const channel = state.trackStates.find((track) => track.id === state.selectedMixerTrackId);
+    channel[key] = Number(event.target.value);
+    const output = effectsInspector.querySelector(`[data-effect-output="${key}"]`);
+    output.textContent = effectValueLabel(key, channel[key]);
+    engine.configureMixer(state.trackStates, state.masterMixer);
+    persist();
+  });
+  effectsBypass?.addEventListener('click', () => {
+    const channel = state.trackStates.find((track) => track.id === state.selectedMixerTrackId);
+    channel.bypass = !channel.bypass;
+    renderMixer();
+    persist();
+    announce(`${effectsHeading.textContent} effects ${channel.bypass ? 'bypassed' : 'active'}`);
+  });
+  document.getElementById('effects-reset')?.addEventListener('click', () => {
+    const index = state.trackStates.findIndex((track) => track.id === state.selectedMixerTrackId);
+    state.trackStates[index] = resetChannelEffects(state.trackStates[index]);
+    renderTrackStates();
+    renderMixer();
+    persist();
+    toast(`${effectsHeading.textContent} effects reset to neutral`);
+  });
 
   padElements.forEach((pad) => {
     pad.addEventListener('pointerdown', (event) => {
@@ -1911,15 +2110,23 @@ function wireEvents() {
     mute.addEventListener('click', () => {
       state.trackStates[index].muted = !state.trackStates[index].muted;
       renderTrackStates();
+      if (state.studioView === 'mix') renderMixer();
       persist();
     });
     solo.addEventListener('click', () => {
       state.trackStates[index].solo = !state.trackStates[index].solo;
       renderTrackStates();
+      if (state.studioView === 'mix') renderMixer();
       persist();
     });
     volume.addEventListener('input', () => {
       state.trackStates[index].volume = Number(volume.value);
+      engine.configureMixer(state.trackStates, state.masterMixer);
+      const strip = mixerRail.querySelector(`[data-mixer-track="${state.trackStates[index].id}"]`);
+      if (strip) {
+        strip.querySelector('[data-mixer-volume]').value = volume.value;
+        strip.querySelector('[data-volume-output]').textContent = `${volume.value}%`;
+      }
       persist();
     });
     track.querySelector('.track-clear').addEventListener('click', () => {
@@ -2019,6 +2226,15 @@ function wireEvents() {
     await saveActiveSample(settings);
   }));
   document.getElementById('duplicate-recording')?.addEventListener('click', duplicateActiveSample);
+  document.getElementById('edit-pad-effects')?.addEventListener('click', () => {
+    const record = recordedPads.get(activeSampleSlot);
+    if (!record) return;
+    const bank = record.slot.split(':')[0];
+    const key = record.slot.split(':')[1];
+    state.selectedMixerTrackId = mixerTrackForSlot(record.slot, BANKS[bank]?.[KEYS.indexOf(key)]?.[1] ?? 'hat');
+    closeSampleEditor();
+    setStudioView('mix');
+  });
   document.getElementById('move-recording')?.addEventListener('click', moveOrSwapActiveSample);
   const replaceFile = document.getElementById('replace-recording-file');
   document.getElementById('replace-recording')?.addEventListener('click', () => replaceFile.click());

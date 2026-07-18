@@ -21,9 +21,25 @@ This implementation follows the editing prototype generated in the existing Beat
 - One-shot plays the trim once. Gate plays while held. Loop repeats while held.
 - Duplicate uses the next truly empty pad. Move/swap targets an empty or user-recorded pad. Replace preserves the pad key and sequence hits. Delete uses inline second-press confirmation.
 
+## Local project sessions
+
+- The project name opens a 460 px desktop sheet and an 88dvh mobile bottom sheet containing recent local sessions.
+- Search, create, inline rename, independent duplicate, and two-step inline deletion are available without native dialogs.
+- Autosave stores project settings and recorded audio in IndexedDB, with a recoverable previous save and a visible device-local status.
+- Versioned `.beatbox` bundles include sequence, pad audio, sample edits, mixer state, and effects. Import validates the bundle and offers Keep both, Replace, or Cancel when names conflict.
+
+## Mixer and effects
+
+- Sequence and Mix are peer views sharing project, theme, input, and transport controls.
+- Four channel strips and a master provide stereo meters, mute/solo, pan/balance, faders, and limiter state.
+- The selected channel inspector exposes fixed three-band EQ, compressor threshold/ratio, reverb send, delay send, bypass, and neutral reset.
+- Recorded-pad editing links to the corresponding channel effects.
+- Offline WAV export renders channel processing, sends, panning, faders, master balance, and limiting into the file.
+- Below 820 px, mixer strips scroll and snap inside their rail while the effects inspector follows beneath it; page-level horizontal overflow remains disabled.
+
 ## Shared behavior
 
 - Stage Felt and Daylight Console use the same markup and semantic tokens.
 - The page does not horizontally scroll; pad and sequencer regions own their overflow.
-- Keyboard shortcuts are ignored while editing form controls. Escape closes the sample sheet.
+- Keyboard shortcuts are ignored while editing form controls. Escape closes the active project or sample sheet.
 - Transport, edit, destructive, and save states are announced through the live region.

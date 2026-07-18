@@ -1,3 +1,5 @@
+import { channelIsAudible, normalizeChannelMixer, normalizeMasterMixer } from './mixer.js';
+
 const TAU = Math.PI * 2;
 
 function createNoiseBuffer(context, seconds = 1) {
@@ -14,6 +16,106 @@ function createNoiseBuffer(context, seconds = 1) {
 
 function safeExp(param, value, time) {
   param.exponentialRampToValueAtTime(Math.max(0.0001, value), time);
+}
+
+function createReverbImpulse(context, seconds = 1.8) {
+  const length = Math.ceil(context.sampleRate * seconds);
+  const buffer = context.createBuffer(2, length, context.sampleRate);
+  let seed = 0x71bca21;
+  for (let channel = 0; channel < 2; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (let index = 0; index < length; index += 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      const noise = (seed / 0xffffffff) * 2 - 1;
+      data[index] = noise * ((1 - index / length) ** 2.8);
+    }
+  }
+  return buffer;
+}
+
+function analyserLevel(analyser) {
+  if (!analyser) return -60;
+  const values = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(values);
+  let sum = 0;
+  for (const value of values) sum += value * value;
+  const rms = Math.sqrt(sum / values.length);
+  return Math.max(-60, 20 * Math.log10(Math.max(rms, 0.001)));
+}
+
+function createMixerGraph(context, channelSettings = [], masterSettings = {}) {
+  const master = normalizeMasterMixer(masterSettings);
+  const masterInput = context.createGain();
+  const masterPan = context.createStereoPanner();
+  const limiter = context.createDynamicsCompressor();
+  const masterAnalyser = context.createAnalyser();
+  const masterGain = context.createGain();
+  masterAnalyser.fftSize = 512;
+  masterAnalyser.smoothingTimeConstant = 0.72;
+  masterPan.pan.value = master.balance / 100;
+  limiter.threshold.value = master.limiter ? master.ceiling : 0;
+  limiter.knee.value = 0;
+  limiter.ratio.value = master.limiter ? 20 : 1;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.18;
+  masterGain.gain.value = master.volume / 100;
+  masterInput.connect(masterPan).connect(limiter).connect(masterAnalyser).connect(masterGain).connect(context.destination);
+
+  const reverb = context.createConvolver();
+  reverb.buffer = createReverbImpulse(context);
+  reverb.connect(masterInput);
+  const delay = context.createDelay(1);
+  const delayFeedback = context.createGain();
+  delay.delayTime.value = 0.25;
+  delayFeedback.gain.value = 0.28;
+  delay.connect(delayFeedback).connect(delay);
+  delay.connect(masterInput);
+
+  const normalizedChannels = channelSettings.map((channel) => normalizeChannelMixer(channel, { id: channel.id, volume: channel.volume }));
+  const channels = new Map();
+  normalizedChannels.forEach((channel) => {
+    const input = context.createGain();
+    const low = context.createBiquadFilter();
+    const mid = context.createBiquadFilter();
+    const high = context.createBiquadFilter();
+    const compressor = context.createDynamicsCompressor();
+    const pan = context.createStereoPanner();
+    const volume = context.createGain();
+    const analyser = context.createAnalyser();
+    const reverbSend = context.createGain();
+    const delaySend = context.createGain();
+    const audible = channelIsAudible(channel, normalizedChannels);
+    const effectsEnabled = !channel.bypass;
+
+    low.type = 'lowshelf';
+    low.frequency.value = 90;
+    low.gain.value = effectsEnabled ? channel.eqLow : 0;
+    mid.type = 'peaking';
+    mid.frequency.value = 1200;
+    mid.Q.value = 0.85;
+    mid.gain.value = effectsEnabled ? channel.eqMid : 0;
+    high.type = 'highshelf';
+    high.frequency.value = 8000;
+    high.gain.value = effectsEnabled ? channel.eqHigh : 0;
+    compressor.threshold.value = effectsEnabled ? channel.compThreshold : 0;
+    compressor.ratio.value = effectsEnabled ? channel.compRatio : 1;
+    compressor.knee.value = 8;
+    compressor.attack.value = 0.008;
+    compressor.release.value = 0.16;
+    pan.pan.value = channel.pan / 100;
+    volume.gain.value = audible ? channel.volume / 100 : 0;
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.68;
+    reverbSend.gain.value = effectsEnabled ? channel.reverbSend / 100 : 0;
+    delaySend.gain.value = effectsEnabled ? channel.delaySend / 100 : 0;
+
+    input.connect(low).connect(mid).connect(high).connect(compressor).connect(pan).connect(volume).connect(analyser).connect(masterInput);
+    analyser.connect(reverbSend).connect(reverb);
+    analyser.connect(delaySend).connect(delay);
+    channels.set(channel.id, { input, low, mid, high, compressor, pan, volume, analyser, reverbSend, delaySend });
+  });
+
+  return { masterInput, masterPan, limiter, masterGain, masterAnalyser, channels };
 }
 
 export function dbToGain(db = 0) {
@@ -64,6 +166,9 @@ export class AudioEngine {
     this.noiseBuffers = new WeakMap();
     this.recordedBuffers = new Map();
     this.reversedBuffers = new WeakMap();
+    this.mixerChannels = [];
+    this.masterSettings = normalizeMasterMixer();
+    this.graph = null;
   }
 
   async ensureReady({ resume = true } = {}) {
@@ -71,12 +176,11 @@ export class AudioEngine {
       const Context = window.AudioContext || window.webkitAudioContext;
       if (!Context) throw new Error('Web Audio is not supported in this browser.');
       this.context = new Context({ latencyHint: 'interactive' });
-      this.master = this.context.createGain();
-      this.master.gain.value = 0.78;
-      this.master.connect(this.context.destination);
+      this.graph = createMixerGraph(this.context, this.mixerChannels, this.masterSettings);
+      this.master = this.graph.masterGain;
       this.monitorGain = this.context.createGain();
       this.monitorGain.gain.value = 0;
-      this.monitorGain.connect(this.master);
+      this.monitorGain.connect(this.graph.masterInput);
       this.analyser = this.context.createAnalyser();
       this.analyser.fftSize = 1024;
       this.analyser.smoothingTimeConstant = 0.76;
@@ -96,6 +200,57 @@ export class AudioEngine {
   setMasterVolume(value) {
     if (!this.master || !this.context) return;
     this.master.gain.setTargetAtTime(value, this.context.currentTime, 0.02);
+  }
+
+  configureMixer(channels = [], master = {}) {
+    this.mixerChannels = channels.map((channel) => normalizeChannelMixer(channel, { id: channel.id, volume: channel.volume }));
+    this.masterSettings = normalizeMasterMixer(master);
+    if (!this.context) return;
+    const canUpdate = this.graph
+      && this.graph.channels.size === this.mixerChannels.length
+      && this.mixerChannels.every((channel) => this.graph.channels.has(channel.id));
+    if (canUpdate) {
+      const now = this.context.currentTime;
+      const anySolo = this.mixerChannels.some((channel) => channel.solo);
+      this.mixerChannels.forEach((channel) => {
+        const nodes = this.graph.channels.get(channel.id);
+        const effectsEnabled = !channel.bypass;
+        const audible = !channel.cleared && !channel.muted && (!anySolo || channel.solo);
+        nodes.low.gain.setTargetAtTime(effectsEnabled ? channel.eqLow : 0, now, 0.015);
+        nodes.mid.gain.setTargetAtTime(effectsEnabled ? channel.eqMid : 0, now, 0.015);
+        nodes.high.gain.setTargetAtTime(effectsEnabled ? channel.eqHigh : 0, now, 0.015);
+        nodes.compressor.threshold.setTargetAtTime(effectsEnabled ? channel.compThreshold : 0, now, 0.015);
+        nodes.compressor.ratio.setTargetAtTime(effectsEnabled ? channel.compRatio : 1, now, 0.015);
+        nodes.pan.pan.setTargetAtTime(channel.pan / 100, now, 0.015);
+        nodes.volume.gain.setTargetAtTime(audible ? channel.volume / 100 : 0, now, 0.015);
+        nodes.reverbSend.gain.setTargetAtTime(effectsEnabled ? channel.reverbSend / 100 : 0, now, 0.02);
+        nodes.delaySend.gain.setTargetAtTime(effectsEnabled ? channel.delaySend / 100 : 0, now, 0.02);
+      });
+      this.graph.masterPan.pan.setTargetAtTime(this.masterSettings.balance / 100, now, 0.015);
+      this.graph.limiter.threshold.setTargetAtTime(this.masterSettings.limiter ? this.masterSettings.ceiling : 0, now, 0.015);
+      this.graph.limiter.ratio.setTargetAtTime(this.masterSettings.limiter ? 20 : 1, now, 0.015);
+      this.graph.masterGain.gain.setTargetAtTime(this.masterSettings.volume / 100, now, 0.015);
+      return;
+    }
+    try { this.graph?.masterGain?.disconnect(); } catch {}
+    this.graph = createMixerGraph(this.context, this.mixerChannels, this.masterSettings);
+    this.master = this.graph.masterGain;
+    if (this.monitorGain) {
+      try { this.monitorGain.disconnect(); } catch {}
+      this.monitorGain.connect(this.graph.masterInput);
+    }
+  }
+
+  trackDestination(trackId) {
+    return this.graph?.channels.get(trackId)?.input ?? this.graph?.masterInput ?? this.master;
+  }
+
+  getTrackLevel(trackId) {
+    return analyserLevel(this.graph?.channels.get(trackId)?.analyser);
+  }
+
+  getMasterLevel() {
+    return analyserLevel(this.graph?.masterAnalyser);
   }
 
   setMonitoring(enabled) {
@@ -205,12 +360,12 @@ export class AudioEngine {
   playRecording(slot, options = {}) {
     const buffer = this.recordedBuffers.get(slot);
     if (!buffer || !this.context) return false;
-    return this.playBuffer(this.context, options.destination ?? this.master, buffer, options);
+    return this.playBuffer(this.context, options.destination ?? this.graph?.masterInput ?? this.master, buffer, options);
   }
 
   play(type, options = {}) {
     if (!this.context) return;
-    this.trigger(this.context, options.destination ?? this.master, type, options.when ?? this.context.currentTime, options.gain ?? 1);
+    this.trigger(this.context, options.destination ?? this.graph?.masterInput ?? this.master, type, options.when ?? this.context.currentTime, options.gain ?? 1);
   }
 
   trigger(context, destination, type, when, gain = 1) {
@@ -322,24 +477,23 @@ export class AudioEngine {
     osc.stop(when + 0.2);
   }
 
-  async renderLoop({ bpm, events, bars = 4 }) {
+  async renderLoop({ bpm, events, bars = 4, channels = [], master: masterSettings = {} }) {
     const sampleRate = 44100;
     const secondsPerBeat = 60 / bpm;
     const duration = bars * 4 * secondsPerBeat;
-    const offline = new OfflineAudioContext(2, Math.ceil((duration + 0.5) * sampleRate), sampleRate);
-    const master = offline.createGain();
-    master.gain.value = 0.72;
-    master.connect(offline.destination);
+    const offline = new OfflineAudioContext(2, Math.ceil((duration + 2.2) * sampleRate), sampleRate);
+    const graph = createMixerGraph(offline, channels, masterSettings);
     for (const event of events) {
+      const destination = graph.channels.get(event.trackId)?.input ?? graph.masterInput;
       if (event.buffer) {
-        this.playBuffer(offline, master, event.buffer, {
+        this.playBuffer(offline, destination, event.buffer, {
           when: event.time,
           gain: event.gain ?? 1,
           sample: event.sample,
           loop: false,
         });
       } else {
-        this.trigger(offline, master, event.type, event.time, event.gain ?? 1);
+        this.trigger(offline, destination, event.type, event.time, event.gain ?? 1);
       }
     }
     return offline.startRendering();

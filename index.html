@@ -180,7 +180,7 @@
       z-index: 20;
     }
 
-    .brand-lockup, .session-actions, .history-actions, .save-state { display: flex; align-items: center; }
+    .brand-lockup, .session-actions, .history-actions, .save-state, .topbar-center { display: flex; align-items: center; }
     .brand-lockup { gap: 12px; min-width: 0; }
     .brand-mark {
       width: 28px; height: 28px; border-radius: 9px;
@@ -194,6 +194,10 @@
     .project-name:hover { color: var(--fg); border-color: var(--border); background: var(--surface-raised); }
     .project-name::before { content: "/"; margin-right: 10px; color: var(--border-strong); }
     .save-state { gap: 7px; color: var(--muted); font-size: 12px; justify-self: center; }
+    .topbar-center { justify-self: center; gap: 12px; }
+    .view-switch { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-pressed); }
+    .view-switch button { min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; }
+    .view-switch button[aria-pressed="true"] { background: var(--surface-raised); color: var(--fg); box-shadow: var(--shadow-control); }
     .save-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
     .history-actions { gap: 4px; justify-content: flex-end; }
     .session-actions { gap: 8px; justify-content: flex-end; }
@@ -264,6 +268,48 @@
       padding: 16px 20px;
       overflow: auto;
     }
+    .workspace.is-hidden { display: none; }
+
+    .mixer-view { display: none; min-height: 0; padding: 18px 20px; overflow: auto; background: var(--bg); }
+    .mixer-view.active { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; }
+    .mixer-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
+    .mixer-heading h1 { margin: 0; font: 760 22px/1.1 var(--font-display); }
+    .mixer-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .mixer-export-note { max-width: 280px; color: var(--muted); font: 10px/1.45 var(--font-mono); text-align: right; }
+    .mixer-layout { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 14px; }
+    .mixer-rail { min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(132px, 1fr)) minmax(148px, 1.05fr); gap: 10px; overflow-x: auto; scrollbar-width: thin; scroll-snap-type: x proximity; }
+    .channel-strip { min-width: 132px; display: grid; grid-template-rows: auto auto 1fr auto auto; gap: 12px; padding: 14px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-control); scroll-snap-align: start; }
+    .channel-strip.selected { border-color: var(--functional); box-shadow: inset 0 0 0 1px var(--functional), var(--shadow-control); }
+    .channel-strip.master { background: var(--surface-raised); border-color: var(--border-strong); }
+    .channel-name { min-height: 34px; }
+    .channel-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 13px var(--font-display); }
+    .channel-name span { color: var(--muted); font: 9px var(--font-mono); }
+    .channel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .channel-actions button, .channel-fx { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); color: var(--fg); cursor: pointer; font: 700 10px var(--font-mono); }
+    .channel-actions button[aria-pressed="true"] { border-color: var(--functional); color: var(--functional); background: var(--functional-soft); }
+    .channel-fader-zone { min-height: 260px; display: grid; grid-template-columns: 16px 16px 1fr; justify-content: center; align-items: stretch; gap: 7px; padding: 4px 6px; }
+    .channel-meter { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-pressed); }
+    .channel-meter::after { content: ""; position: absolute; inset: auto 2px 2px; height: var(--level, 5%); border-radius: 3px; background: linear-gradient(0deg, var(--functional) 0 76%, var(--warning) 76% 92%, var(--record) 92%); transition: height 80ms linear; }
+    .channel-fader { width: 44px; height: 100%; justify-self: center; writing-mode: vertical-lr; direction: rtl; accent-color: var(--accent); }
+    .channel-value { text-align: center; color: var(--muted); font: 10px var(--font-mono); }
+    .pan-row { display: grid; grid-template-columns: 1fr 36px; align-items: center; gap: 5px; }
+    .pan-row input { width: 100%; accent-color: var(--functional); }
+    .pan-row output { color: var(--muted); font: 9px var(--font-mono); text-align: right; }
+    .channel-fx { width: 100%; }
+    .master-status { min-height: 38px; color: var(--success); font: 9px/1.4 var(--font-mono); text-align: center; }
+    .master-status.clipping { color: var(--record); }
+    .effects-inspector { min-width: 0; overflow-y: auto; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-control); }
+    .effects-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .effects-head h2 { margin: 0; font: 720 16px var(--font-display); }
+    .effects-head span { color: var(--muted); font: 9px var(--font-mono); }
+    .effects-actions { display: flex; gap: 6px; }
+    .effects-actions button { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); color: var(--fg); cursor: pointer; }
+    .effects-actions button[aria-pressed="true"] { color: var(--warning); border-color: var(--warning); }
+    .effect-group { padding: 15px 0; border-bottom: 1px solid var(--border); }
+    .effect-group h3 { margin: 0 0 9px; font: 700 12px var(--font-display); }
+    .effect-control { display: grid; grid-template-columns: 88px 1fr 56px; align-items: center; gap: 8px; min-height: 48px; font-size: 11px; }
+    .effect-control input { width: 100%; accent-color: var(--functional); }
+    .effect-control output { color: var(--muted); font: 10px var(--font-mono); text-align: right; }
     .pad-section, .timeline-section { background: var(--surface); min-width: 0; min-height: 0; padding: 16px; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 0 var(--control-highlight) inset; }
     .pad-section { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 12px; }
     .pad-section.coach-dismissed { grid-template-rows: auto auto minmax(0, 1fr); }
@@ -554,19 +600,30 @@
     @media (max-width: 819px) {
       body { background: var(--bg); }
       .studio { min-height: 100svh; grid-template-rows: 56px auto minmax(0, 1fr) 82px; }
-      .topbar { grid-template-columns: minmax(0, 1fr) auto; padding: 0 14px; }
+      .topbar { grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; padding: 0 14px; }
       .brand-name { display: none; }
       .project-name { font-weight: 700; color: var(--fg); margin-left: 0; }
       .project-name::before { display: none; }
       .save-state { display: none; }
+      .topbar-center { gap: 0; }
+      .view-switch { padding: 2px; }
+      .view-switch button { min-height: 32px; padding: 0 8px; }
       .history-actions, .share-button, .export-button { display: none; }
       .theme-toggle { width: 44px; min-width: 44px; padding: 0; }
       .theme-label { display: none; }
-      .mobile-mode-label { display: inline-flex; align-items: center; min-height: 32px; padding: 0 10px; border-radius: 8px; background: var(--functional-soft); color: var(--functional); font-size: 11px; font-weight: 700; }
+      .mobile-mode-label { display: none; }
       .input-strip { grid-template-columns: 1fr auto; min-height: 68px; padding: 8px 14px; gap: 12px; }
       .privacy-state { white-space: normal; }
       .meter-wrap, .monitor-button { display: none; }
       .workspace { min-height: 0; overflow: auto; padding: 12px 10px; }
+      .mixer-view { padding: 12px 10px; }
+      .mixer-heading { align-items: flex-start; }
+      .mixer-export-note { display: none; }
+      .mixer-layout { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+      .mixer-rail { grid-template-columns: repeat(5, minmax(152px, 72vw)); padding-bottom: 8px; scroll-snap-type: x mandatory; }
+      .channel-strip { min-width: 152px; }
+      .channel-fader-zone { min-height: 230px; }
+      .effects-inspector { overflow: visible; }
       .pad-section { min-height: 560px; padding: 16px 14px 18px; grid-template-rows: auto auto auto auto minmax(0, 1fr); }
       .section-heading h1 { font-size: 20px; }
       .section-meta { display: none; }
@@ -628,7 +685,10 @@
         <span class="brand-name">Beatbox Studio</span>
         <button class="project-name" id="project-library-trigger" type="button" data-od-id="project-name" aria-haspopup="dialog" aria-controls="project-sheet">Basement Cypher 03</button>
       </div>
-      <div class="save-state" role="status" aria-live="polite" data-od-id="save-state"><span class="save-dot"></span>Saved just now</div>
+      <div class="topbar-center">
+        <div class="view-switch" aria-label="Studio view" data-od-id="sequence-mix-switch"><button type="button" data-studio-view="sequence" aria-pressed="true">Sequence</button><button type="button" data-studio-view="mix" aria-pressed="false">Mix</button></div>
+        <div class="save-state" role="status" aria-live="polite" data-od-id="save-state"><span class="save-dot"></span>Saved just now</div>
+      </div>
       <div class="session-actions">
         <div class="history-actions" data-od-id="history-controls">
           <button class="icon-button" aria-label="Undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 6 6"/></svg></button>
@@ -755,6 +815,29 @@
       </section>
     </div>
 
+    <section class="mixer-view" id="mixer-view" aria-labelledby="mixer-heading" data-od-id="mixer-view">
+      <div class="mixer-heading"><div><div class="eyebrow">MIX · FOUR CHANNELS + MASTER</div><h1 id="mixer-heading">Shape the loop</h1><p>Balance channels, place them in stereo, and print effects into your export.</p></div><div class="mixer-export-note">OFFLINE EXPORT · EQ, compression, sends, pan, faders, and master limiting are rendered into the WAV.</div></div>
+      <div class="mixer-layout">
+        <div class="mixer-rail" id="mixer-rail" aria-label="Mixer channels"></div>
+        <aside class="effects-inspector" id="effects-inspector" aria-labelledby="effects-heading">
+          <div class="effects-head"><div><span>CHANNEL EFFECTS</span><h2 id="effects-heading">Kicks</h2></div><div class="effects-actions"><button id="effects-bypass" type="button" aria-pressed="false">Bypass</button><button id="effects-reset" type="button">Reset</button></div></div>
+          <div class="effect-group"><h3>Three-band EQ</h3>
+            <label class="effect-control"><span>Low · 90 Hz</span><input type="range" min="-12" max="12" step="1" data-effect="eqLow"><output data-effect-output="eqLow">0 dB</output></label>
+            <label class="effect-control"><span>Mid · 1.2 kHz</span><input type="range" min="-12" max="12" step="1" data-effect="eqMid"><output data-effect-output="eqMid">0 dB</output></label>
+            <label class="effect-control"><span>High · 8 kHz</span><input type="range" min="-12" max="12" step="1" data-effect="eqHigh"><output data-effect-output="eqHigh">0 dB</output></label>
+          </div>
+          <div class="effect-group"><h3>Compressor</h3>
+            <label class="effect-control"><span>Threshold</span><input type="range" min="-60" max="0" step="1" data-effect="compThreshold"><output data-effect-output="compThreshold">−18 dB</output></label>
+            <label class="effect-control"><span>Ratio</span><input type="range" min="1" max="20" step="0.5" data-effect="compRatio"><output data-effect-output="compRatio">3:1</output></label>
+          </div>
+          <div class="effect-group"><h3>Shared sends</h3>
+            <label class="effect-control"><span>Reverb</span><input type="range" min="0" max="100" step="1" data-effect="reverbSend"><output data-effect-output="reverbSend">0%</output></label>
+            <label class="effect-control"><span>Delay</span><input type="range" min="0" max="100" step="1" data-effect="delaySend"><output data-effect-output="delaySend">0%</output></label>
+          </div>
+        </aside>
+      </div>
+    </section>
+
     <footer class="transport" data-od-id="transport-controls" aria-label="Transport controls">
       <div class="transport-left">
         <div class="readout"><div class="readout-label">BPM</div><div class="readout-value"><input id="bpm" type="number" min="40" max="240" value="92" aria-label="Tempo in beats per minute"></div></div>
@@ -775,7 +858,7 @@
   </main>
 
   <div class="project-scrim" id="project-scrim"></div>
-  <aside class="project-sheet" id="project-sheet" aria-labelledby="project-sheet-heading" aria-hidden="true" data-od-id="project-library-sheet">
+  <aside class="project-sheet" id="project-sheet" role="dialog" aria-modal="true" aria-labelledby="project-sheet-heading" aria-hidden="true" data-od-id="project-library-sheet">
     <div class="project-sheet-head">
       <div class="project-sheet-title"><strong id="project-sheet-heading">Your sessions</strong><span>Saved locally on this device</span></div>
       <button class="icon-button" id="close-project-sheet" type="button" aria-label="Close project library">×</button>
@@ -840,6 +923,7 @@
     <div class="sample-section">
       <h3>Pad actions</h3>
       <div class="sample-actions">
+        <button id="edit-pad-effects" class="wide" type="button">Edit pad effects in Mix</button>
         <button id="duplicate-recording" type="button">Duplicate</button><select id="move-target" aria-label="Move or swap destination"></select>
         <button id="move-recording" class="wide" type="button">Move / swap to selected pad</button>
         <button id="replace-recording" class="wide" type="button">Replace recording</button><input class="sr-only" id="replace-recording-file" type="file" accept="audio/*">
