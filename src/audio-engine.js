@@ -27,7 +27,7 @@ export class AudioEngine {
     this.recordedBuffers = new Map();
   }
 
-  async ensureReady() {
+  async ensureReady({ resume = true } = {}) {
     if (!this.context) {
       const Context = window.AudioContext || window.webkitAudioContext;
       if (!Context) throw new Error('Web Audio is not supported in this browser.');
@@ -42,7 +42,7 @@ export class AudioEngine {
       this.analyser.fftSize = 1024;
       this.analyser.smoothingTimeConstant = 0.76;
     }
-    if (this.context.state === 'suspended') await this.context.resume();
+    if (resume && this.context.state === 'suspended') await this.context.resume();
     return this.context;
   }
 
@@ -88,7 +88,7 @@ export class AudioEngine {
   }
 
   async registerRecording(slot, blob) {
-    const context = await this.ensureReady();
+    const context = await this.ensureReady({ resume: false });
     const data = await blob.arrayBuffer();
     const decoded = await context.decodeAudioData(data.slice(0));
     this.recordedBuffers.set(slot, decoded);
@@ -101,6 +101,10 @@ export class AudioEngine {
 
   getRecordingBuffer(slot) {
     return this.recordedBuffers.get(slot) ?? null;
+  }
+
+  removeRecording(slot) {
+    this.recordedBuffers.delete(slot);
   }
 
   playRecording(slot, options = {}) {

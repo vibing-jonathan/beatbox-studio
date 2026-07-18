@@ -12,6 +12,14 @@ python -m http.server 4173
 
 Then visit `http://localhost:4173`.
 
+## Verification
+
+Run the dependency-free audio export test with:
+
+```powershell
+node tests/audio-engine.test.mjs
+```
+
 ## Features
 
 - Web Audio-powered synthesized beatbox kit across three pad banks

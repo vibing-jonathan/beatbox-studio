@@ -344,7 +344,7 @@
     .clip-bars { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 20px; display: flex; align-items: center; gap: 2px; opacity: .7; }
     .clip-bars i { width: 3px; height: var(--h); background: var(--accent); border-radius: 2px; }
     .clip.cool .clip-bars i { background: var(--functional); }
-    .playhead { position: absolute; top: 0; bottom: 0; left: 31%; width: 2px; background: var(--functional); z-index: 8; box-shadow: 0 0 0 1px var(--playhead-edge); }
+    .playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--functional); z-index: 8; box-shadow: 0 0 0 1px var(--playhead-edge); }
     .playhead::before { content: ""; position: absolute; top: 0; left: -4px; width: 10px; height: 7px; border-radius: 2px 2px 5px 5px; background: var(--functional); }
     .timeline.playing .playhead { will-change: left; }
     .track.is-muted .lane { opacity: .32; filter: saturate(.45); }
@@ -530,7 +530,7 @@
           <button class="bank-tab" role="tab" aria-selected="false">Bank B</button>
           <button class="bank-tab" role="tab" aria-selected="false">One-shots</button>
         </div>
-        <div class="mobile-loop-rail" aria-label="Loop position, 31 percent"></div>
+        <div class="mobile-loop-rail" aria-label="Loop position, 0 percent"></div>
         <div class="pad-grid">
           <button class="pad recorded" data-key="1" data-od-id="pad-kick-deep" aria-label="Play Kick Deep, keyboard 1">
             <span class="pad-top"><span class="pad-name">Kick Deep</span><span class="keycap">1</span></span>
@@ -603,133 +603,6 @@
   </main>
 
   <div class="sr-only" id="live-region" aria-live="polite"></div>
-  <script type="application/x-beatbox-prototype">
-    (() => {
-      const pads = [...document.querySelectorAll('.pad')];
-      const playButton = document.getElementById('play-button');
-      const stopButton = document.getElementById('stop-button');
-      const recordButton = document.getElementById('record-button');
-      const inputRecord = document.getElementById('input-record');
-      const timeline = document.getElementById('timeline');
-      const live = document.getElementById('live-region');
-      const transportLabel = document.getElementById('transport-label');
-      const transportTime = document.getElementById('transport-time');
-      const themeToggle = document.getElementById('theme-toggle');
-      let playing = false;
-      let recording = false;
-      let recordingInput = false;
-
-      function announce(message) { live.textContent = message; }
-      function updateThemeToggle(theme) {
-        const isLight = theme === 'light';
-        const label = isLight ? 'Light' : 'Dark';
-        themeToggle.setAttribute('aria-pressed', String(isLight));
-        themeToggle.setAttribute('aria-label', `Theme: ${label}. Switch to ${isLight ? 'dark' : 'light'} theme`);
-        themeToggle.title = `Theme: ${label}`;
-        themeToggle.querySelector('.theme-label').textContent = label;
-      }
-
-      updateThemeToggle(document.documentElement.dataset.theme);
-      themeToggle.addEventListener('click', () => {
-        const nextTheme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-        document.documentElement.dataset.theme = nextTheme;
-        try { localStorage.setItem('beatbox-studio-theme', nextTheme); } catch {}
-        updateThemeToggle(nextTheme);
-        announce(`${nextTheme === 'light' ? 'Light' : 'Dark'} theme active`);
-      });
-
-      function triggerPad(pad) {
-        if (!pad) return;
-        if (pad.classList.contains('empty')) {
-          announce(`Empty pad ${pad.dataset.key.toUpperCase()}. Use the record button to capture a sound.`);
-          return;
-        }
-        pad.classList.add('is-hit');
-        window.setTimeout(() => pad.classList.remove('is-hit'), 140);
-        announce(pad.querySelector('.pad-name').textContent + ' played');
-      }
-
-      pads.forEach(pad => pad.addEventListener('click', () => triggerPad(pad)));
-
-      function setPlaying(next) {
-        playing = next;
-        playButton.setAttribute('aria-pressed', String(playing));
-        playButton.textContent = playing ? 'Ⅱ' : '▶';
-        playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-        timeline.classList.toggle('playing', playing);
-        transportLabel.textContent = recording ? 'RECORDING' : (playing ? 'PLAYING' : 'READY');
-        transportTime.textContent = playing ? '2.1.1' : '1.3.2';
-        announce(playing ? 'Loop playing' : 'Loop paused');
-      }
-
-      playButton.addEventListener('click', () => setPlaying(!playing));
-      stopButton.addEventListener('click', () => {
-        recording = false;
-        recordButton.classList.remove('recording');
-        recordButton.setAttribute('aria-pressed', 'false');
-        setPlaying(false);
-        transportLabel.textContent = 'STOPPED';
-        transportTime.textContent = '1.1.1';
-      });
-
-      recordButton.addEventListener('click', () => {
-        recording = !recording;
-        recordButton.classList.toggle('recording', recording);
-        recordButton.setAttribute('aria-pressed', String(recording));
-        if (recording) setPlaying(true);
-        transportLabel.textContent = recording ? 'RECORDING' : (playing ? 'PLAYING' : 'READY');
-        announce(recording ? 'Loop recording started after one bar count-in' : 'Loop recording stopped');
-      });
-
-      inputRecord.addEventListener('click', () => {
-        recordingInput = !recordingInput;
-        inputRecord.classList.toggle('recording', recordingInput);
-        document.getElementById('mic-status').textContent = recordingInput ? 'Recording new sound · 00:03' : 'Ready to capture';
-        document.getElementById('privacy-label').textContent = recordingInput ? 'Recording locally' : 'Ready';
-        inputRecord.setAttribute('aria-label', recordingInput ? 'Stop recording sound' : 'Record a new sound');
-        announce(recordingInput ? 'Recording new sound locally' : 'Sound recording stopped');
-      });
-
-      document.getElementById('monitor-button').addEventListener('click', event => {
-        const next = event.currentTarget.getAttribute('aria-pressed') !== 'true';
-        event.currentTarget.setAttribute('aria-pressed', String(next));
-        event.currentTarget.textContent = next ? 'Monitoring on' : 'Monitoring off';
-        announce(event.currentTarget.textContent);
-      });
-
-      document.querySelectorAll('[aria-pressed]').forEach(button => {
-        if (button.id || button.classList.contains('pad')) return;
-        button.addEventListener('click', () => {
-          const next = button.getAttribute('aria-pressed') !== 'true';
-          button.setAttribute('aria-pressed', String(next));
-        });
-      });
-
-      document.getElementById('coach-dismiss').addEventListener('click', () => document.getElementById('coach').remove());
-
-      document.addEventListener('keydown', event => {
-        const target = event.target;
-        if (target.matches('input, select, textarea') || target.isContentEditable) return;
-        const key = event.key.toLowerCase();
-        if (key === ' ') {
-          event.preventDefault();
-          setPlaying(!playing);
-          return;
-        }
-        triggerPad(pads.find(pad => pad.dataset.key === key));
-      });
-
-      const meter = document.getElementById('meter-fill');
-      const meterValue = document.getElementById('meter-value');
-      if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        window.setInterval(() => {
-          const level = recordingInput ? 58 + Math.random() * 39 : 36 + Math.random() * 28;
-          meter.style.width = level + '%';
-          meterValue.textContent = '−' + Math.max(1, Math.round((100 - level) * .45)) + ' dB';
-        }, 170);
-      }
-    })();
-  </script>
   <script type="module" src="src/app.js"></script>
 </body>
 </html>

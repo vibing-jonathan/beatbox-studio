@@ -1,5 +1,5 @@
 import { AudioEngine, audioBufferToWav } from './audio-engine.js';
-import { loadRecordedPads, loadSettings, saveRecordedPad, saveSettings } from './storage.js';
+import { loadRecordedPads, loadSettings, removeRecordedPad, saveRecordedPad, saveSettings } from './storage.js';
 
 const engine = new AudioEngine();
 const padElements = [...document.querySelectorAll('.pad')];
@@ -189,7 +189,7 @@ function renderPads() {
     pad.classList.toggle('capture-target', definition.slot === recordingTargetSlot);
     pad.setAttribute('aria-label', empty
       ? `Empty pad, keyboard ${key.toUpperCase()}. Record or drop audio.`
-      : `Play ${definition.name}, keyboard ${key.toUpperCase()}`);
+      : `Play ${definition.name}, keyboard ${key.toUpperCase()}${definition.recorded ? '. Press Delete to clear.' : ''}`);
     pad.querySelector('.pad-name').textContent = definition.name;
     pad.querySelector('.keycap').textContent = key.toUpperCase();
     pad.querySelector('.pad-meta').textContent = empty ? 'EMPTY' : `${definition.duration.toFixed(2)} s`;
@@ -293,14 +293,19 @@ function activeTrack(index) {
   return !track.muted && (!anySolo || track.solo);
 }
 
+function swingDelayForStep(step) {
+  return state.quantize === '1/8 swing' && step % 4 === 2 ? (60 / state.bpm / 4) * 0.55 : 0;
+}
+
 function scheduleStep(step, when) {
+  const hitTime = when + swingDelayForStep(step);
   TRACKS.forEach((track, index) => {
     if (!activeTrack(index) || !track.steps.includes(step)) return;
-    engine.play(track.type, { when, gain: track.gain * (state.trackStates[index].volume / 100) });
+    engine.play(track.type, { when: hitTime, gain: track.gain * (state.trackStates[index].volume / 100) });
   });
   for (const event of state.customEvents.filter((item) => item.step === step)) {
-    if (event.recorded && engine.playRecording(event.slot, { when, gain: 0.9 })) continue;
-    engine.play(event.type, { when, gain: 0.8 });
+    if (event.recorded && engine.playRecording(event.slot, { when: hitTime, gain: 0.9 })) continue;
+    engine.play(event.type, { when: hitTime, gain: 0.8 });
   }
   if (state.metronome && step % 4 === 0) engine.play('click', { when, gain: step % 16 === 0 ? 0.32 : 0.18 });
   if (pendingRecordSteps > 0) {
@@ -327,6 +332,7 @@ function updatePlayhead() {
   const visualStep = Math.floor(progress * 64) % 64;
   playhead.style.left = `${progress * 100}%`;
   mobileLoopRail.style.setProperty('--loop-progress', `${progress * 100}%`);
+  mobileLoopRail.setAttribute('aria-label', `Loop position, ${Math.round(progress * 100)} percent`);
   transportTime.textContent = formatPosition(visualStep);
   animationFrame = requestAnimationFrame(updatePlayhead);
 }
@@ -375,6 +381,7 @@ function stopTransport() {
   currentStep = 0;
   playhead.style.left = '0%';
   mobileLoopRail.style.setProperty('--loop-progress', '0%');
+  mobileLoopRail.setAttribute('aria-label', 'Loop position, 0 percent');
   transportLabel.textContent = 'STOPPED';
   transportTime.textContent = '1.1.1';
   recordButton.classList.remove('recording');
@@ -598,16 +605,38 @@ async function importAudioFile(file, pad) {
   }
 }
 
+async function clearRecordedPad(pad) {
+  const slot = pad.dataset.slot;
+  const record = recordedPads.get(slot);
+  if (!record) return;
+  try {
+    await removeRecordedPad(slot);
+    recordedPads.delete(slot);
+    engine.removeRecording(slot);
+    state.customEvents = state.customEvents.filter((event) => event.slot !== slot);
+    history = [structuredClone(state.customEvents)];
+    historyIndex = 0;
+    renderPads();
+    renderOverdubMarkers();
+    renderHistoryControls();
+    persist();
+    toast(`${record.name} cleared`);
+    announce(`${record.name} removed from pad ${pad.dataset.key.toUpperCase()}`);
+  } catch {
+    toast('The recording could not be cleared.', 'error');
+  }
+}
+
 function collectLoopEvents(includeRecorded = true) {
   const secondsPerStep = 60 / state.bpm / 4;
   const events = [];
   TRACKS.forEach((track, index) => {
     if (!activeTrack(index)) return;
-    track.steps.forEach((step) => events.push({ type: track.type, time: step * secondsPerStep, gain: track.gain * (state.trackStates[index].volume / 100) }));
+    track.steps.forEach((step) => events.push({ type: track.type, time: step * secondsPerStep + swingDelayForStep(step), gain: track.gain * (state.trackStates[index].volume / 100) }));
   });
   state.customEvents.forEach((event) => {
     const buffer = includeRecorded && event.recorded ? engine.getRecordingBuffer?.(event.slot) : null;
-    events.push({ type: event.type, buffer, time: event.step * secondsPerStep, gain: 0.8 });
+    events.push({ type: event.type, buffer, time: event.step * secondsPerStep + swingDelayForStep(event.step), gain: 0.8 });
   });
   return events;
 }
@@ -665,15 +694,18 @@ function beginProjectRename() {
     projectName.classList.remove('is-editing');
     projectName.textContent = save ? projectName.textContent.trim().slice(0, 48) || before : before;
     state.projectName = projectName.textContent;
+    projectName.setAttribute('aria-label', `${state.projectName}. Rename project`);
     projectName.removeEventListener('blur', onBlur);
+    projectName.removeEventListener('keydown', onEditKeydown);
     persist();
   };
   const onBlur = () => finish(true);
-  projectName.addEventListener('blur', onBlur, { once: true });
-  projectName.addEventListener('keydown', (event) => {
+  const onEditKeydown = (event) => {
     if (event.key === 'Enter') { event.preventDefault(); projectName.blur(); }
     if (event.key === 'Escape') { event.preventDefault(); finish(false); }
-  }, { once: true });
+  };
+  projectName.addEventListener('blur', onBlur, { once: true });
+  projectName.addEventListener('keydown', onEditKeydown);
 }
 
 function wireEvents() {
@@ -694,6 +726,12 @@ function wireEvents() {
       event.preventDefault();
       pad.classList.remove('is-drop-target');
       importAudioFile(event.dataTransfer.files[0], pad);
+    });
+    pad.addEventListener('keydown', (event) => {
+      if ((event.key === 'Delete' || event.key === 'Backspace') && recordedPads.has(pad.dataset.slot)) {
+        event.preventDefault();
+        clearRecordedPad(pad);
+      }
     });
   });
 
