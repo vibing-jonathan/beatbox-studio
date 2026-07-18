@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 
-import { audioBufferToWav } from '../src/audio-engine.js';
+import { audioBufferToWav, dbToGain, normalizeSampleSettings, pitchRate, samplePlaybackWindow } from '../src/audio-engine.js';
+
+assert.ok(Math.abs(dbToGain(6) - 1.995262) < 0.00001);
+assert.equal(pitchRate(12), 2);
+assert.deepEqual(normalizeSampleSettings({ trimStart: 0.2, trimEnd: 0.8, gainDb: 30, pitch: -24, mode: 'wat' }, 1), {
+  trimStart: 0.2, trimEnd: 0.8, fadeIn: 0, fadeOut: 0, gainDb: 12, pitch: -12, reverse: false, mode: 'one-shot',
+});
+const windowed = samplePlaybackWindow({ trimStart: 0.25, trimEnd: 0.75, pitch: 12, gainDb: 6 }, 1);
+assert.equal(windowed.sourceDuration, 0.5);
+assert.equal(windowed.playbackDuration, 0.25);
 
 const samples = [
   new Float32Array([-1, -0.5, 0.5, 1]),

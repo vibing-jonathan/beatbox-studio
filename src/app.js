@@ -1,6 +1,14 @@
-import { AudioEngine, audioBufferToWav } from './audio-engine.js';
+import { AudioEngine, audioBufferToWav, normalizeSampleSettings } from './audio-engine.js';
 import { loadRecordedPads, loadSettings, removeRecordedPad, saveRecordedPad, saveSettings } from './storage.js';
 import { loopPositionAtTime, normalizeLoopPosition, quantizeLoopPosition, SWING_OFFSET_STEPS } from './timing.js';
+import {
+  createInitialPatterns,
+  duplicateEvents,
+  loopStepsForBars,
+  nudgeEvent,
+  quantizeEvent,
+  trackIdForType,
+} from './sequencer.js';
 
 const engine = new AudioEngine();
 const padElements = [...document.querySelectorAll('.pad')];
@@ -34,6 +42,34 @@ const privacyLabel = document.getElementById('privacy-label');
 const meter = document.getElementById('meter-fill');
 const meterValue = document.getElementById('meter-value');
 const meterRole = document.querySelector('[role="meter"]');
+const patternSelect = document.getElementById('pattern-select');
+const selectModeButton = document.getElementById('select-mode');
+const duplicateSelectionButton = document.getElementById('duplicate-selection');
+const deleteSelectionButton = document.getElementById('delete-selection');
+const quantizeSelectionButton = document.getElementById('quantize-selection');
+const barOptions = document.getElementById('bar-options');
+const duplicatePatternButton = document.getElementById('duplicate-pattern');
+const selectionStatus = document.getElementById('selection-status');
+const inspectorCopy = document.getElementById('inspector-copy');
+const velocityInput = document.getElementById('hit-velocity');
+const velocityOutput = document.getElementById('hit-velocity-output');
+const nudgeLeftButton = document.getElementById('nudge-left');
+const nudgeRightButton = document.getElementById('nudge-right');
+const timingOutput = document.getElementById('timing-output');
+const sampleSheet = document.getElementById('sample-sheet');
+const sampleScrim = document.getElementById('sample-scrim');
+const sampleNameInput = document.getElementById('sample-name');
+const sampleMeta = document.getElementById('sample-meta');
+const waveformEditor = document.getElementById('waveform-editor');
+const auditionButton = document.getElementById('sample-audition');
+const normalizeButton = document.getElementById('sample-normalize');
+const gainInput = document.getElementById('sample-gain');
+const fadeInInput = document.getElementById('sample-fade-in');
+const fadeOutInput = document.getElementById('sample-fade-out');
+const pitchInput = document.getElementById('sample-pitch');
+const reverseButton = document.getElementById('sample-reverse');
+const playbackModes = document.getElementById('sample-playback-mode');
+const moveTargetSelect = document.getElementById('move-target');
 
 const KEYS = ['1', '2', '3', '4', 'q', 'w', 'e', 'r', 'a', 's', 'd', 'f'];
 const BANKS = {
@@ -52,13 +88,14 @@ const BANKS = {
   ],
 };
 const TRACKS = [
-  { id: 'kicks', type: 'kick', steps: [0, 32], gain: 0.95 },
-  { id: 'snares', type: 'snare', steps: [8, 40], gain: 0.82 },
-  { id: 'hats', type: 'hat', steps: Array.from({ length: 32 }, (_, index) => index * 2), gain: 0.45 },
-  { id: 'bass', type: 'bass', steps: [16, 48], gain: 0.62 },
+  { id: 'kicks', name: 'Kicks', type: 'kick', defaultName: 'Kick Deep', steps: [0, 32], gain: 0.95 },
+  { id: 'snares', name: 'Snares', type: 'snare', defaultName: 'Snare Tight', steps: [8, 40], gain: 0.82 },
+  { id: 'hats', name: 'Hats & clicks', type: 'hat', defaultName: 'Hat Closed', steps: Array.from({ length: 32 }, (_, index) => index * 2), gain: 0.45 },
+  { id: 'bass', name: 'Throat bass', type: 'bass', defaultName: 'Throat Bass', steps: [16, 48], gain: 0.62 },
 ];
 
 const stored = loadSettings();
+const initialPatterns = createInitialPatterns(stored, TRACKS);
 const state = {
   activeBank: BANKS[stored.activeBank] ? stored.activeBank : 'Bank A',
   bpm: clamp(Number(stored.bpm) || 92, 40, 240),
@@ -73,7 +110,9 @@ const state = {
     solo: Boolean(stored.trackStates?.[index]?.solo),
     cleared: Boolean(stored.trackStates?.[index]?.cleared),
   })),
-  customEvents: Array.isArray(stored.customEvents) ? stored.customEvents : [],
+  loopBars: [1, 2, 4, 8].includes(Number(stored.loopBars)) ? Number(stored.loopBars) : 4,
+  patterns: initialPatterns.patterns,
+  activePatternId: initialPatterns.activePatternId,
 };
 
 let isPlaying = false;
@@ -90,11 +129,21 @@ let recordingChunks = [];
 let recordingStartedAt = 0;
 let recordingTimer = null;
 let recordingTargetSlot = null;
-let history = [structuredClone(state.customEvents)];
+let history = [sequenceSnapshot()];
 let historyIndex = 0;
 let saveTimer = null;
 let toastStack = null;
 const recordedPads = new Map();
+const selectedEventIds = new Set();
+const activePadPlaybacks = new Map();
+let selectMode = false;
+let activeSampleSlot = null;
+let auditionPlayback = null;
+let auditionFrame = null;
+let auditionStartedAt = 0;
+let velocitySnapshot = null;
+let deleteSampleArmed = false;
+let lastVisualStep = -1;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -102,6 +151,49 @@ function clamp(value, min, max) {
 
 function slotFor(bank, key) {
   return `${bank}:${key}`;
+}
+
+function loopSteps() {
+  return loopStepsForBars(state.loopBars);
+}
+
+function activePattern() {
+  return state.patterns.find((pattern) => pattern.id === state.activePatternId) ?? state.patterns[0];
+}
+
+function currentEvents() {
+  return activePattern()?.events ?? [];
+}
+
+function sequenceSnapshot() {
+  return structuredClone({
+    patterns: state.patterns,
+    activePatternId: state.activePatternId,
+    loopBars: state.loopBars,
+  });
+}
+
+function restoreSequenceSnapshot(snapshot) {
+  state.patterns = structuredClone(snapshot.patterns);
+  state.activePatternId = snapshot.activePatternId;
+  state.loopBars = snapshot.loopBars;
+  selectedEventIds.clear();
+  renderSequencer();
+  renderPatternControls();
+  renderHistoryControls();
+  persist();
+}
+
+function makeEventId(prefix = 'hit') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function sampleSettings(record) {
+  return normalizeSampleSettings(record, record?.duration);
+}
+
+function updateRecordSettings(record, settings) {
+  Object.assign(record, normalizeSampleSettings({ ...record, ...settings }, record.duration), { updatedAt: Date.now() });
 }
 
 function announce(message) {
@@ -145,7 +237,9 @@ function persist() {
       quantize: state.quantize,
       projectName: state.projectName,
       trackStates: state.trackStates,
-      customEvents: state.customEvents,
+      loopBars: state.loopBars,
+      patterns: state.patterns,
+      activePatternId: state.activePatternId,
     });
     setSaveLabel('Saved just now');
   }, 260);
@@ -184,11 +278,11 @@ function decoratePadShells() {
     shell.className = 'pad-shell';
     pad.before(shell);
     shell.append(pad);
-    const removeButton = document.createElement('button');
-    removeButton.className = 'pad-remove';
-    removeButton.type = 'button';
-    removeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>';
-    shell.append(removeButton);
+    const editButton = document.createElement('button');
+    editButton.className = 'pad-edit';
+    editButton.type = 'button';
+    editButton.textContent = 'Edit';
+    shell.append(editButton);
   });
 }
 
@@ -223,9 +317,9 @@ function renderPads() {
     pad.querySelector('.pad-name').textContent = definition.name;
     pad.querySelector('.keycap').textContent = key.toUpperCase();
     pad.querySelector('.pad-meta').textContent = empty ? 'EMPTY' : `${definition.duration.toFixed(2)} s`;
-    const removeButton = pad.parentElement.querySelector('.pad-remove');
-    removeButton.setAttribute('aria-label', definition.recorded ? `Delete ${definition.name} from pad ${key.toUpperCase()}` : 'Delete recording');
-    removeButton.title = definition.recorded ? `Delete ${definition.name}` : '';
+    const editButton = pad.parentElement.querySelector('.pad-edit');
+    editButton.setAttribute('aria-label', definition.recorded ? `Edit ${definition.name} on pad ${key.toUpperCase()}` : 'Edit recording');
+    editButton.title = definition.recorded ? `Edit ${definition.name}` : '';
     let wave = pad.querySelector('.pad-wave');
     if (!empty && !wave) {
       wave = document.createElement('span');
@@ -268,35 +362,105 @@ function renderTrackStates() {
   });
 }
 
-function renderOverdubMarkers() {
-  document.querySelectorAll('.overdub-marker').forEach((marker) => marker.remove());
+function selectedEvents() {
+  return currentEvents().filter((event) => selectedEventIds.has(event.id));
+}
+
+function renderPatternControls() {
+  if (!patternSelect) return;
+  patternSelect.innerHTML = state.patterns.map((pattern) => `<option value="${pattern.id}">${pattern.name}</option>`).join('');
+  patternSelect.value = state.activePatternId;
+  barOptions?.querySelectorAll('[data-bars]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.bars) === state.loopBars)));
+  const loopReadout = document.getElementById('loop-bars-readout');
+  if (loopReadout) loopReadout.firstChild.textContent = `${state.loopBars} `;
+  const eyebrow = document.getElementById('loop-eyebrow');
+  if (eyebrow) eyebrow.textContent = `${state.loopBars}-BAR LOOP · ${formatPosition(currentStep)}`;
+}
+
+function signedEventOffset(event) {
+  const offset = Number(event.offset) || 0;
+  return offset > 0.5 ? offset - 1 : offset;
+}
+
+function renderHitInspector() {
+  const events = selectedEvents();
+  const enabled = events.length > 0;
+  [velocityInput, nudgeLeftButton, nudgeRightButton, duplicateSelectionButton, deleteSelectionButton]
+    .forEach((control) => { if (control) control.disabled = !enabled; });
+  if (selectionStatus) selectionStatus.textContent = enabled ? `${events.length} hit${events.length === 1 ? '' : 's'} selected` : 'No hits selected';
+  if (inspectorCopy) inspectorCopy.textContent = enabled
+    ? `Editing ${events.length} hit${events.length === 1 ? '' : 's'} together. Mixed values move relatively.`
+    : 'Turn on Select hits, then choose one or more steps.';
+  if (!enabled) {
+    if (velocityOutput) velocityOutput.textContent = '—';
+    if (timingOutput) timingOutput.textContent = '0 ms';
+    return;
+  }
+  const velocities = events.map((event) => Math.round(event.velocity * 127));
+  const offsets = events.map((event) => Math.round(signedEventOffset(event) * (60 / state.bpm / 4) * 1000));
+  if (velocityInput) velocityInput.value = String(velocities[0]);
+  if (velocityOutput) velocityOutput.textContent = velocities.every((value) => value === velocities[0]) ? String(velocities[0]) : 'Mixed';
+  if (timingOutput) timingOutput.textContent = offsets.every((value) => value === offsets[0]) ? `${offsets[0]} ms` : 'Mixed';
+}
+
+function renderSequencer() {
+  const steps = loopSteps();
+  timeline.style.setProperty('--steps', String(steps));
+  timeline.style.minWidth = `${136 + steps * 44}px`;
   const ruler = document.querySelector('.ruler');
-  state.customEvents.forEach((event, index) => {
-    const marker = document.createElement('button');
-    marker.className = 'overdub-marker';
-    marker.style.left = `${(eventLoopPosition(event) / 64) * 100}%`;
-    marker.title = `${event.name} at ${formatPosition(event.step)}`;
-    marker.setAttribute('aria-label', `${event.name} overdub at ${formatPosition(event.step)}. Click to remove.`);
-    marker.addEventListener('click', () => {
-      commitHistory(state.customEvents.filter((_, eventIndex) => eventIndex !== index));
-      toast('Overdub hit removed');
+  ruler.style.gridTemplateColumns = `repeat(${state.loopBars}, minmax(${16 * 44}px, 1fr))`;
+  ruler.innerHTML = Array.from({ length: state.loopBars }, (_, bar) => `<span>${bar + 1} <small>· 1 2 3 4</small></span>`).join('');
+  ruler.append(playhead);
+
+  trackElements.forEach((trackElement, trackIndex) => {
+    const track = TRACKS[trackIndex];
+    const lane = trackElement.querySelector('.lane');
+    lane.style.gridTemplateColumns = `repeat(${steps}, minmax(44px, 1fr))`;
+    const byStep = new Map();
+    currentEvents().filter((event) => event.trackId === track.id && event.step < steps).forEach((event) => {
+      if (!byStep.has(event.step)) byStep.set(event.step, []);
+      byStep.get(event.step).push(event);
     });
-    ruler.append(marker);
+    lane.innerHTML = Array.from({ length: steps }, (_, step) => {
+      const events = byStep.get(step) ?? [];
+      const primary = events[0];
+      const selected = events.some((event) => selectedEventIds.has(event.id));
+      const origin = events.some((event) => event.origin === 'overdub') ? 'live' : 'preset';
+      const velocity = primary?.velocity ?? 0.78;
+      const position = formatPosition(step);
+      return `<button class="step-cell${primary ? ` has-hit ${origin}` : ''}${selected ? ' selected' : ''}" data-track="${track.id}" data-step="${step}" data-event-ids="${events.map((event) => event.id).join(',')}" style="--velocity:${velocity}" aria-pressed="${Boolean(primary)}" aria-label="${track.name}, ${position}${primary ? `, ${origin === 'live' ? 'live overdub' : 'preset'} hit, velocity ${Math.round(velocity * 127)}` : ', empty'}">${events.length > 1 ? `<span class="hit-count">${events.length}</span>` : ''}</button>`;
+    }).join('');
   });
+  renderPatternControls();
+  renderHitInspector();
 }
 
 function renderHistoryControls() {
   undoButton.disabled = historyIndex === 0;
   redoButton.disabled = historyIndex >= history.length - 1;
-  clearOverdubsButton.disabled = state.customEvents.length === 0;
+  if (clearOverdubsButton) clearOverdubsButton.disabled = currentEvents().length === 0;
 }
 
 function commitHistory(events) {
-  state.customEvents = structuredClone(events);
+  activePattern().events = structuredClone(events);
   history = history.slice(0, historyIndex + 1);
-  history.push(structuredClone(events));
+  history.push(sequenceSnapshot());
+  if (history.length > 60) history.shift();
   historyIndex = history.length - 1;
-  renderOverdubMarkers();
+  selectedEventIds.forEach((id) => {
+    if (!activePattern().events.some((event) => event.id === id)) selectedEventIds.delete(id);
+  });
+  renderSequencer();
+  renderHistoryControls();
+  persist();
+}
+
+function pushSequenceHistory() {
+  history = history.slice(0, historyIndex + 1);
+  history.push(sequenceSnapshot());
+  if (history.length > 60) history.shift();
+  historyIndex = history.length - 1;
+  renderSequencer();
   renderHistoryControls();
   persist();
 }
@@ -304,25 +468,19 @@ function commitHistory(events) {
 function undo() {
   if (historyIndex === 0) return;
   historyIndex -= 1;
-  state.customEvents = structuredClone(history[historyIndex]);
-  renderOverdubMarkers();
-  renderHistoryControls();
-  persist();
-  announce('Last overdub undone');
+  restoreSequenceSnapshot(history[historyIndex]);
+  announce('Last edit undone');
 }
 
 function redo() {
   if (historyIndex >= history.length - 1) return;
   historyIndex += 1;
-  state.customEvents = structuredClone(history[historyIndex]);
-  renderOverdubMarkers();
-  renderHistoryControls();
-  persist();
-  announce('Overdub restored');
+  restoreSequenceSnapshot(history[historyIndex]);
+  announce('Edit restored');
 }
 
 function formatPosition(step) {
-  const normalized = ((step % 64) + 64) % 64;
+  const normalized = ((step % loopSteps()) + loopSteps()) % loopSteps();
   return `${Math.floor(normalized / 16) + 1}.${Math.floor((normalized % 16) / 4) + 1}.${(normalized % 4) + 1}`;
 }
 
@@ -344,20 +502,20 @@ function eventOffsetSteps(event) {
 }
 
 function eventLoopPosition(event) {
-  return normalizeLoopPosition(event.step + eventOffsetSteps(event));
+  return normalizeLoopPosition(event.step + eventOffsetSteps(event), loopSteps());
 }
 
 function scheduleStep(step, when) {
   const hitTime = when + swingDelayForStep(step);
   const secondsPerStep = 60 / state.bpm / 4;
-  TRACKS.forEach((track, index) => {
-    if (!activeTrack(index) || !track.steps.includes(step)) return;
-    engine.play(track.type, { when: hitTime, gain: track.gain * (state.trackStates[index].volume / 100) });
-  });
-  for (const event of state.customEvents.filter((item) => item.step === step)) {
+  for (const event of currentEvents().filter((item) => item.step === step)) {
+    const trackIndex = TRACKS.findIndex((track) => track.id === event.trackId);
+    if (trackIndex < 0 || !activeTrack(trackIndex)) continue;
     const eventTime = when + eventOffsetSteps(event) * secondsPerStep;
-    if (event.recorded && engine.playRecording(event.slot, { when: eventTime, gain: 0.9 })) continue;
-    engine.play(event.type, { when: eventTime, gain: 0.8 });
+    const gain = event.velocity * (state.trackStates[trackIndex].volume / 100);
+    const recording = event.recorded ? recordedPads.get(event.slot) : null;
+    if (recording && engine.playRecording(event.slot, { when: eventTime, gain, sample: recording, loop: false })) continue;
+    engine.play(event.type, { when: eventTime || hitTime, gain });
   }
   if (state.metronome && step % 4 === 0) engine.play('click', { when, gain: step % 16 === 0 ? 0.32 : 0.18 });
   if (pendingRecordSteps > 0) {
@@ -371,7 +529,7 @@ function scheduler() {
   const secondsPerStep = 60 / state.bpm / 4;
   while (nextNoteTime < engine.currentTime + 0.11) {
     scheduleStep(currentStep, nextNoteTime);
-    currentStep = (currentStep + 1) % 64;
+    currentStep = (currentStep + 1) % loopSteps();
     if (currentStep === 0) loopStartTime = nextNoteTime + secondsPerStep;
     nextNoteTime += secondsPerStep;
   }
@@ -379,10 +537,15 @@ function scheduler() {
 
 function updatePlayhead() {
   if (!isPlaying || !engine.context) return;
-  const loopDuration = (60 / state.bpm) * 16;
+  const loopDuration = (60 / state.bpm) * state.loopBars * 4;
   const audibleTime = engine.currentTime - engine.outputLatency;
   const progress = clamp(((audibleTime - loopStartTime) % loopDuration) / loopDuration, 0, 1);
-  const visualStep = Math.floor(progress * 64) % 64;
+  const visualStep = Math.floor(progress * loopSteps()) % loopSteps();
+  if (visualStep !== lastVisualStep) {
+    timeline.querySelectorAll('.step-cell.current').forEach((cell) => cell.classList.remove('current'));
+    timeline.querySelectorAll(`.step-cell[data-step="${visualStep}"]`).forEach((cell) => cell.classList.add('current'));
+    lastVisualStep = visualStep;
+  }
   playhead.style.left = `${progress * 100}%`;
   mobileLoopRail.style.setProperty('--loop-progress', `${progress * 100}%`);
   mobileLoopRail.setAttribute('aria-label', `Loop position, ${Math.round(progress * 100)} percent`);
@@ -400,6 +563,8 @@ async function startTransport() {
   }
   isPlaying = true;
   currentStep = 0;
+  lastVisualStep = -1;
+  timeline.querySelectorAll('.step-cell.current').forEach((cell) => cell.classList.remove('current'));
   nextNoteTime = engine.currentTime + 0.06;
   loopStartTime = nextNoteTime;
   playButton.setAttribute('aria-pressed', 'true');
@@ -475,8 +640,8 @@ async function toggleLoopRecording() {
 
 function capturedOverdubTiming(audioTime) {
   const secondsPerStep = 60 / state.bpm / 4;
-  const rawPosition = loopPositionAtTime(audioTime, loopStartTime, secondsPerStep);
-  return quantizeLoopPosition(rawPosition, state.quantize);
+  const rawPosition = loopPositionAtTime(audioTime, loopStartTime, secondsPerStep, loopSteps());
+  return quantizeLoopPosition(rawPosition, state.quantize, loopSteps());
 }
 
 async function triggerPad(pad, velocity = 1) {
@@ -495,7 +660,16 @@ async function triggerPad(pad, velocity = 1) {
     return;
   }
   const padTime = engine.currentTime;
-  const played = definition.recorded && engine.playRecording(definition.slot, { when: padTime, gain: velocity });
+  const recording = definition.recorded ? recordedPads.get(definition.slot) : null;
+  const mode = recording ? sampleSettings(recording).mode : 'one-shot';
+  if (activePadPlaybacks.has(definition.slot) && (mode === 'gate' || mode === 'loop')) return;
+  const played = definition.recorded && engine.playRecording(definition.slot, {
+    when: padTime,
+    gain: velocity,
+    sample: recording,
+    onEnded: () => activePadPlaybacks.delete(definition.slot),
+  });
+  if (played && (mode === 'gate' || mode === 'loop')) activePadPlaybacks.set(definition.slot, played);
   if (!played) engine.play(definition.type, { when: padTime, gain: velocity });
   pad.classList.add('is-hit');
   window.setTimeout(() => pad.classList.remove('is-hit'), 120);
@@ -503,13 +677,17 @@ async function triggerPad(pad, velocity = 1) {
     const timing = capturedOverdubTiming(padTime);
     const event = {
       ...timing,
+      id: makeEventId('overdub'),
+      trackId: trackIdForType(definition.type),
+      velocity,
+      origin: 'overdub',
       quantize: state.quantize,
       slot: definition.slot,
       name: definition.name,
       type: definition.type,
       recorded: definition.recorded,
     };
-    const withoutDuplicate = state.customEvents.filter((item) => !(item.slot === event.slot && Math.abs(eventLoopPosition(item) - eventLoopPosition(event)) < 0.05));
+    const withoutDuplicate = currentEvents().filter((item) => !(item.slot === event.slot && Math.abs(eventLoopPosition(item) - eventLoopPosition(event)) < 0.05));
     commitHistory([...withoutDuplicate, event].sort((a, b) => eventLoopPosition(a) - eventLoopPosition(b)));
   }
   announce(`${definition.name} played`);
@@ -618,6 +796,7 @@ async function finalizeInputRecording() {
       blob,
       duration,
       name: `My sound ${key}`,
+      ...normalizeSampleSettings({}, duration),
       updatedAt: Date.now(),
     };
     recordedPads.set(record.slot, record);
@@ -651,7 +830,7 @@ async function importAudioFile(file, pad) {
   const slot = pad.dataset.slot;
   try {
     const duration = await engine.registerRecording(slot, file);
-    const record = { slot, blob: file, duration, name: file.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Imported sound', updatedAt: Date.now() };
+    const record = { slot, blob: file, duration, name: file.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Imported sound', ...normalizeSampleSettings({}, duration), updatedAt: Date.now() };
     recordedPads.set(slot, record);
     await saveRecordedPad(record);
     renderPads();
@@ -670,11 +849,11 @@ async function clearRecordedPad(pad) {
     await removeRecordedPad(slot);
     recordedPads.delete(slot);
     engine.removeRecording(slot);
-    state.customEvents = state.customEvents.filter((event) => event.slot !== slot);
-    history = [structuredClone(state.customEvents)];
+    state.patterns.forEach((pattern) => { pattern.events = pattern.events.filter((event) => event.slot !== slot); });
+    history = [sequenceSnapshot()];
     historyIndex = 0;
     renderPads();
-    renderOverdubMarkers();
+    renderSequencer();
     renderHistoryControls();
     persist();
     toast(`${record.name} cleared`);
@@ -692,23 +871,28 @@ function requestClearRecordedPad(pad) {
 }
 
 function clearAllOverdubs() {
-  if (!state.customEvents.length) return;
-  const count = state.customEvents.length;
+  if (!currentEvents().length) return;
+  const count = currentEvents().length;
   commitHistory([]);
-  toast(`${count} overdub ${count === 1 ? 'hit' : 'hits'} cleared · Undo is available`);
-  announce('All overdub hits cleared. Use Undo to restore them.');
+  toast(`${count} pattern ${count === 1 ? 'hit' : 'hits'} cleared · Undo is available`);
+  announce('Pattern cleared. Use Undo to restore it.');
 }
 
 function collectLoopEvents(includeRecorded = true) {
   const secondsPerStep = 60 / state.bpm / 4;
   const events = [];
-  TRACKS.forEach((track, index) => {
-    if (!activeTrack(index)) return;
-    track.steps.forEach((step) => events.push({ type: track.type, time: step * secondsPerStep + swingDelayForStep(step), gain: track.gain * (state.trackStates[index].volume / 100) }));
-  });
-  state.customEvents.forEach((event) => {
+  currentEvents().filter((event) => event.step < loopSteps()).forEach((event) => {
+    const trackIndex = TRACKS.findIndex((track) => track.id === event.trackId);
+    if (trackIndex < 0 || !activeTrack(trackIndex)) return;
     const buffer = includeRecorded && event.recorded ? engine.getRecordingBuffer?.(event.slot) : null;
-    events.push({ type: event.type, buffer, time: eventLoopPosition(event) * secondsPerStep, gain: 0.8 });
+    const recording = buffer ? recordedPads.get(event.slot) : null;
+    events.push({
+      type: event.type,
+      buffer,
+      sample: recording,
+      time: eventLoopPosition(event) * secondsPerStep,
+      gain: event.velocity * (state.trackStates[trackIndex].volume / 100),
+    });
   });
   return events;
 }
@@ -719,7 +903,7 @@ async function exportLoop() {
   exportButton.lastChild.textContent = 'Rendering…';
   try {
     await engine.ensureReady();
-    const buffer = await engine.renderLoop({ bpm: state.bpm, events: collectLoopEvents(), bars: 4 });
+    const buffer = await engine.renderLoop({ bpm: state.bpm, events: collectLoopEvents(), bars: state.loopBars });
     const wav = audioBufferToWav(buffer);
     const url = URL.createObjectURL(wav);
     const anchor = document.createElement('a');
@@ -727,7 +911,7 @@ async function exportLoop() {
     anchor.download = `${state.projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'beatbox-loop'}.wav`;
     anchor.click();
     URL.revokeObjectURL(url);
-    toast('Four-bar WAV exported', 'success');
+    toast(`${state.loopBars}-bar WAV exported`, 'success');
     announce('Loop export complete');
   } catch (error) {
     toast(`Export failed: ${error.message}`, 'error', 5200);
@@ -748,6 +932,307 @@ async function shareStudio() {
     }
   } catch (error) {
     if (error.name !== 'AbortError') toast('Could not share this session.', 'error');
+  }
+}
+
+function handleStepCellClick(button, event) {
+  const step = Number(button.dataset.step);
+  const trackId = button.dataset.track;
+  const ids = button.dataset.eventIds.split(',').filter(Boolean);
+  if (selectMode || event.shiftKey) {
+    if (!ids.length) {
+      toast('That step is empty. Switch off Select hits to add one.');
+      return;
+    }
+    ids.forEach((id) => (selectedEventIds.has(id) ? selectedEventIds.delete(id) : selectedEventIds.add(id)));
+    renderSequencer();
+    return;
+  }
+  if (ids.length) {
+    commitHistory(currentEvents().filter((item) => !ids.includes(item.id)));
+    toast(`${ids.length} hit${ids.length === 1 ? '' : 's'} removed`);
+    return;
+  }
+  const track = TRACKS.find((item) => item.id === trackId);
+  commitHistory([...currentEvents(), {
+    id: makeEventId('drawn'),
+    trackId,
+    type: track.type,
+    name: track.defaultName,
+    step,
+    offset: 0,
+    velocity: 100 / 127,
+    origin: 'overdub',
+    recorded: false,
+  }]);
+  announce(`${track.name} hit added at ${formatPosition(step)}`);
+}
+
+function deleteSelection() {
+  if (!selectedEventIds.size) return;
+  const count = selectedEventIds.size;
+  commitHistory(currentEvents().filter((event) => !selectedEventIds.has(event.id)));
+  selectedEventIds.clear();
+  toast(`${count} hit${count === 1 ? '' : 's'} deleted`);
+}
+
+function duplicateSelection() {
+  if (!selectedEventIds.size) return;
+  const occupied = new Set(currentEvents().map((event) => `${event.trackId}:${event.step}`));
+  const copies = duplicateEvents(currentEvents(), selectedEventIds, loopSteps(), 1)
+    .filter((event) => !occupied.has(`${event.trackId}:${event.step}`))
+    .map((event) => ({ ...event, id: makeEventId('copy'), origin: 'overdub' }));
+  if (!copies.length) {
+    toast('No free step is available one step later.');
+    return;
+  }
+  selectedEventIds.clear();
+  copies.forEach((event) => selectedEventIds.add(event.id));
+  commitHistory([...currentEvents(), ...copies]);
+  toast(`${copies.length} hit${copies.length === 1 ? '' : 's'} duplicated one step later`);
+}
+
+function nudgeSelection(milliseconds) {
+  if (!selectedEventIds.size) return;
+  const stepDelta = (milliseconds / 1000) / (60 / state.bpm / 4);
+  commitHistory(currentEvents().map((event) => selectedEventIds.has(event.id) ? nudgeEvent(event, stepDelta, loopSteps()) : event));
+  announce(`Selected hits nudged ${milliseconds < 0 ? 'earlier' : 'later'} by ${Math.abs(milliseconds)} millisecond`);
+}
+
+function quantizeSelection() {
+  const hasSelection = selectedEventIds.size > 0;
+  commitHistory(currentEvents().map((event) => (!hasSelection || selectedEventIds.has(event.id))
+    ? quantizeEvent(event, state.quantize, loopSteps())
+    : event));
+  toast(`${hasSelection ? 'Selected hits' : 'Pattern'} quantized to ${state.quantize}`);
+}
+
+function duplicatePattern() {
+  const source = activePattern();
+  const base = `${source.name} copy`;
+  let name = base;
+  let suffix = 2;
+  while (state.patterns.some((pattern) => pattern.name === name)) name = `${base} ${suffix++}`;
+  const copy = {
+    id: makeEventId('pattern'),
+    name,
+    events: source.events.map((event) => ({ ...event, id: makeEventId('hit-copy') })),
+  };
+  state.patterns.push(copy);
+  state.activePatternId = copy.id;
+  selectedEventIds.clear();
+  pushSequenceHistory();
+  toast(`Pattern duplicated as ${name}`);
+}
+
+function waveformBars(buffer, count = 84) {
+  if (!buffer) return Array.from({ length: count }, (_, index) => 18 + ((index * 37) % 72));
+  const channel = buffer.getChannelData(0);
+  const size = Math.max(1, Math.floor(channel.length / count));
+  const peaks = [];
+  for (let index = 0; index < count; index += 1) {
+    let peak = 0;
+    const start = index * size;
+    const end = Math.min(channel.length, start + size);
+    for (let sample = start; sample < end; sample += 1) peak = Math.max(peak, Math.abs(channel[sample]));
+    peaks.push(Math.max(8, Math.round(peak * 100)));
+  }
+  return peaks;
+}
+
+function populateMoveTargets() {
+  if (!moveTargetSelect || !activeSampleSlot) return;
+  moveTargetSelect.innerHTML = Object.keys(BANKS).flatMap((bank) => KEYS.map((key) => {
+    const slot = slotFor(bank, key);
+    if (slot === activeSampleSlot) return '';
+    const recording = recordedPads.get(slot);
+    return `<option value="${slot}">${bank} · ${key.toUpperCase()}${recording ? ` · swap with ${recording.name}` : ''}</option>`;
+  })).join('');
+}
+
+function renderSampleEditor() {
+  const record = recordedPads.get(activeSampleSlot);
+  if (!record) return;
+  const settings = sampleSettings(record);
+  const buffer = engine.getRecordingBuffer(record.slot);
+  const startPercent = (settings.trimStart / record.duration) * 100;
+  const endPercent = (settings.trimEnd / record.duration) * 100;
+  waveformEditor.style.setProperty('--trim-start', `${startPercent}%`);
+  waveformEditor.style.setProperty('--trim-end', `${endPercent}%`);
+  waveformEditor.style.setProperty('--cursor', `${startPercent}%`);
+  waveformEditor.querySelector('.waveform-bars').innerHTML = waveformBars(buffer).map((height) => `<i style="--h:${height}%"></i>`).join('');
+  sampleNameInput.value = record.name;
+  sampleMeta.textContent = `${record.slot.replace(':', ' · PAD ')} · ${record.duration.toFixed(2)} S`;
+  document.getElementById('trim-start-time').textContent = `${settings.trimStart.toFixed(2)} s`;
+  document.getElementById('trim-end-time').textContent = `${settings.trimEnd.toFixed(2)} s`;
+  document.getElementById('trim-duration').textContent = `${(settings.trimEnd - settings.trimStart).toFixed(2)} s selected`;
+  gainInput.value = String(settings.gainDb);
+  fadeInInput.value = String(Math.round(settings.fadeIn * 1000));
+  fadeOutInput.value = String(Math.round(settings.fadeOut * 1000));
+  pitchInput.value = String(settings.pitch);
+  document.getElementById('sample-gain-output').textContent = `${settings.gainDb > 0 ? '+' : ''}${settings.gainDb} dB`;
+  document.getElementById('sample-fade-in-output').textContent = `${Math.round(settings.fadeIn * 1000)} ms`;
+  document.getElementById('sample-fade-out-output').textContent = `${Math.round(settings.fadeOut * 1000)} ms`;
+  document.getElementById('sample-pitch-output').textContent = `${settings.pitch > 0 ? '+' : ''}${settings.pitch} st`;
+  reverseButton.setAttribute('aria-pressed', String(settings.reverse));
+  playbackModes.querySelectorAll('[data-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === settings.mode)));
+  const hints = {
+    'one-shot': 'Plays the whole trimmed sound each time you trigger the pad.',
+    gate: 'Plays only while you hold the pad.',
+    loop: 'Repeats the trimmed sound while you hold the pad.',
+  };
+  document.getElementById('sample-mode-hint').textContent = hints[settings.mode];
+  populateMoveTargets();
+}
+
+function stopAudition() {
+  auditionPlayback?.stop();
+  auditionPlayback = null;
+  cancelAnimationFrame(auditionFrame);
+  auditionFrame = null;
+  if (auditionButton) auditionButton.textContent = '▶ Audition';
+}
+
+async function auditionSample() {
+  if (auditionPlayback) {
+    stopAudition();
+    return;
+  }
+  const record = recordedPads.get(activeSampleSlot);
+  if (!record) return;
+  await engine.ensureReady();
+  const settings = sampleSettings(record);
+  auditionStartedAt = engine.currentTime;
+  auditionPlayback = engine.playRecording(record.slot, {
+    sample: { ...settings, mode: 'one-shot' },
+    loop: false,
+    onEnded: stopAudition,
+  });
+  auditionButton.textContent = '■ Stop';
+  const playbackDuration = auditionPlayback.duration;
+  const start = (settings.trimStart / record.duration) * 100;
+  const end = (settings.trimEnd / record.duration) * 100;
+  const tick = () => {
+    if (!auditionPlayback) return;
+    const progress = clamp((engine.currentTime - auditionStartedAt) / playbackDuration, 0, 1);
+    const cursor = settings.reverse ? end - (end - start) * progress : start + (end - start) * progress;
+    waveformEditor.style.setProperty('--cursor', `${cursor}%`);
+    auditionFrame = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function openSampleEditor(slot) {
+  if (!recordedPads.has(slot)) return;
+  activeSampleSlot = slot;
+  deleteSampleArmed = false;
+  document.getElementById('delete-recording').textContent = 'Delete recording';
+  renderSampleEditor();
+  sampleSheet.classList.add('open');
+  sampleScrim.classList.add('open');
+  sampleSheet.setAttribute('aria-hidden', 'false');
+  window.setTimeout(() => sampleNameInput.focus(), 190);
+}
+
+function closeSampleEditor() {
+  stopAudition();
+  sampleSheet.classList.remove('open');
+  sampleScrim.classList.remove('open');
+  sampleSheet.setAttribute('aria-hidden', 'true');
+  activeSampleSlot = null;
+}
+
+async function saveActiveSample(settings, { redraw = true } = {}) {
+  const record = recordedPads.get(activeSampleSlot);
+  if (!record) return;
+  updateRecordSettings(record, settings);
+  await saveRecordedPad(record);
+  if (redraw) renderSampleEditor();
+  renderPads();
+}
+
+function trimFromPointer(handle, clientX) {
+  const record = recordedPads.get(activeSampleSlot);
+  if (!record) return;
+  const rect = waveformEditor.getBoundingClientRect();
+  const time = clamp((clientX - rect.left) / rect.width, 0, 1) * record.duration;
+  const settings = sampleSettings(record);
+  const minimum = Math.min(0.02, record.duration / 4);
+  if (handle.dataset.trim === 'start') settings.trimStart = Math.min(settings.trimEnd - minimum, time);
+  else settings.trimEnd = Math.max(settings.trimStart + minimum, time);
+  updateRecordSettings(record, settings);
+  renderSampleEditor();
+}
+
+async function duplicateActiveSample() {
+  const record = recordedPads.get(activeSampleSlot);
+  const targets = Object.keys(BANKS).flatMap((bank) => KEYS.map((key) => slotFor(bank, key)));
+  const target = targets.find((slot) => !recordedPads.has(slot) && slot !== activeSampleSlot);
+  if (!record || !target) {
+    toast('No empty pad is available.', 'error');
+    return;
+  }
+  const copy = { ...record, slot: target, name: `${record.name} copy`.slice(0, 24), updatedAt: Date.now() };
+  await engine.registerRecording(target, copy.blob);
+  recordedPads.set(target, copy);
+  await saveRecordedPad(copy);
+  renderPads();
+  populateMoveTargets();
+  toast(`${record.name} duplicated to ${target.replace(':', ' · ')}`, 'success');
+}
+
+function remapEventSlots(from, to, swapFrom = null) {
+  state.patterns.forEach((pattern) => {
+    pattern.events.forEach((event) => {
+      if (event.slot === from) event.slot = '__moving__';
+      else if (swapFrom && event.slot === to) event.slot = from;
+    });
+    pattern.events.forEach((event) => { if (event.slot === '__moving__') event.slot = to; });
+  });
+}
+
+async function moveOrSwapActiveSample() {
+  const from = activeSampleSlot;
+  const to = moveTargetSelect.value;
+  const record = recordedPads.get(from);
+  if (!record || !to) return;
+  const targetRecord = recordedPads.get(to);
+  if (targetRecord) {
+    const moved = { ...record, slot: to, updatedAt: Date.now() };
+    const swapped = { ...targetRecord, slot: from, updatedAt: Date.now() };
+    recordedPads.set(to, moved);
+    recordedPads.set(from, swapped);
+    await Promise.all([engine.registerRecording(to, moved.blob), engine.registerRecording(from, swapped.blob), saveRecordedPad(moved), saveRecordedPad(swapped)]);
+    remapEventSlots(from, to, true);
+    toast(`Pads swapped`, 'success');
+  } else {
+    const moved = { ...record, slot: to, updatedAt: Date.now() };
+    await removeRecordedPad(from);
+    engine.removeRecording(from);
+    recordedPads.delete(from);
+    recordedPads.set(to, moved);
+    await Promise.all([engine.registerRecording(to, moved.blob), saveRecordedPad(moved)]);
+    remapEventSlots(from, to);
+    toast(`${record.name} moved to ${to.replace(':', ' · ')}`, 'success');
+  }
+  activeSampleSlot = to;
+  pushSequenceHistory();
+  renderPads();
+  renderSampleEditor();
+}
+
+async function replaceActiveSample(file) {
+  const record = recordedPads.get(activeSampleSlot);
+  if (!record || !file?.type.startsWith('audio/')) return;
+  try {
+    const duration = await engine.registerRecording(record.slot, file);
+    Object.assign(record, { blob: file, duration, ...normalizeSampleSettings({}, duration), updatedAt: Date.now() });
+    await saveRecordedPad(record);
+    renderPads();
+    renderSampleEditor();
+    toast('Recording replaced. Pad key and sequence hits were kept.', 'success');
+  } catch {
+    toast('This audio file could not be decoded.', 'error');
   }
 }
 
@@ -787,11 +1272,28 @@ function wireEvents() {
     document.documentElement.dataset.theme = next;
     try { localStorage.setItem('beatbox-studio-theme', next); } catch {}
     updateThemeToggle(next);
+    if (activeSampleSlot) renderSampleEditor();
     announce(`${next === 'light' ? 'Light' : 'Dark'} theme active`);
   });
 
   padElements.forEach((pad) => {
-    pad.addEventListener('click', () => triggerPad(pad));
+    pad.addEventListener('pointerdown', (event) => {
+      if (event.button === 0) triggerPad(pad);
+    });
+    pad.addEventListener('click', (event) => {
+      if (event.detail === 0) triggerPad(pad);
+    });
+    const release = () => {
+      const playback = activePadPlaybacks.get(pad.dataset.slot);
+      const record = recordedPads.get(pad.dataset.slot);
+      if (playback && ['gate', 'loop'].includes(sampleSettings(record).mode)) {
+        playback.stop();
+        activePadPlaybacks.delete(pad.dataset.slot);
+        pad.classList.remove('is-hit');
+      }
+    };
+    pad.addEventListener('pointerup', release);
+    pad.addEventListener('pointercancel', release);
     pad.addEventListener('dragover', (event) => { event.preventDefault(); pad.classList.add('is-drop-target'); });
     pad.addEventListener('dragleave', () => pad.classList.remove('is-drop-target'));
     pad.addEventListener('drop', (event) => {
@@ -805,7 +1307,10 @@ function wireEvents() {
         requestClearRecordedPad(pad);
       }
     });
-    pad.parentElement.querySelector('.pad-remove').addEventListener('click', () => requestClearRecordedPad(pad));
+    pad.parentElement.querySelector('.pad-edit').addEventListener('click', (event) => {
+      event.stopPropagation();
+      openSampleEditor(pad.dataset.slot);
+    });
   });
 
   bankButtons.forEach((button) => button.addEventListener('click', () => {
@@ -823,7 +1328,7 @@ function wireEvents() {
   inputRecord.addEventListener('click', toggleInputRecording);
   exportButton.addEventListener('click', exportLoop);
   shareButton.addEventListener('click', shareStudio);
-  clearOverdubsButton.addEventListener('click', clearAllOverdubs);
+  clearOverdubsButton?.addEventListener('click', clearAllOverdubs);
   undoButton.addEventListener('click', undo);
   redoButton.addEventListener('click', redo);
   projectName.addEventListener('dblclick', beginProjectRename);
@@ -873,6 +1378,58 @@ function wireEvents() {
     persist();
   });
 
+  timeline.addEventListener('click', (event) => {
+    const cell = event.target.closest('.step-cell');
+    if (cell) handleStepCellClick(cell, event);
+  });
+  selectModeButton?.addEventListener('click', () => {
+    selectMode = !selectMode;
+    selectModeButton.setAttribute('aria-pressed', String(selectMode));
+    selectedEventIds.clear();
+    renderSequencer();
+    announce(selectMode ? 'Select hits on. Tap hits to build a selection.' : 'Draw mode on. Tap steps to add or remove hits.');
+  });
+  duplicateSelectionButton?.addEventListener('click', duplicateSelection);
+  deleteSelectionButton?.addEventListener('click', deleteSelection);
+  quantizeSelectionButton?.addEventListener('click', quantizeSelection);
+  nudgeLeftButton?.addEventListener('click', () => nudgeSelection(-1));
+  nudgeRightButton?.addEventListener('click', () => nudgeSelection(1));
+  velocityInput?.addEventListener('pointerdown', () => { velocitySnapshot = sequenceSnapshot(); });
+  velocityInput?.addEventListener('input', () => {
+    const velocity = Number(velocityInput.value) / 127;
+    activePattern().events = currentEvents().map((event) => selectedEventIds.has(event.id) ? { ...event, velocity } : event);
+    renderSequencer();
+  });
+  velocityInput?.addEventListener('change', () => {
+    if (!velocitySnapshot) return;
+    history = history.slice(0, historyIndex + 1);
+    history.push(sequenceSnapshot());
+    historyIndex = history.length - 1;
+    velocitySnapshot = null;
+    renderHistoryControls();
+    persist();
+  });
+  barOptions?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-bars]');
+    if (!button || Number(button.dataset.bars) === state.loopBars) return;
+    state.loopBars = Number(button.dataset.bars);
+    currentStep %= loopSteps();
+    selectedEventIds.clear();
+    pushSequenceHistory();
+    announce(`Loop length ${state.loopBars} bars`);
+  });
+  patternSelect?.addEventListener('change', () => {
+    state.activePatternId = patternSelect.value;
+    selectedEventIds.clear();
+    history = [sequenceSnapshot()];
+    historyIndex = 0;
+    renderSequencer();
+    renderHistoryControls();
+    persist();
+    announce(`${activePattern().name} loaded`);
+  });
+  duplicatePatternButton?.addEventListener('click', duplicatePattern);
+
   trackElements.forEach((track, index) => {
     const [mute, solo] = track.querySelectorAll('.track-toggle');
     const volume = track.querySelector('.volume');
@@ -900,6 +1457,118 @@ function wireEvents() {
     });
   });
 
+  document.getElementById('close-sample-sheet')?.addEventListener('click', closeSampleEditor);
+  sampleScrim?.addEventListener('click', closeSampleEditor);
+  sampleNameInput?.addEventListener('change', async () => {
+    const record = recordedPads.get(activeSampleSlot);
+    if (!record) return;
+    const previous = record.name;
+    record.name = sampleNameInput.value.trim().slice(0, 24) || previous;
+    record.updatedAt = Date.now();
+    state.patterns.forEach((pattern) => pattern.events.forEach((event) => {
+      if (event.slot === activeSampleSlot) event.name = record.name;
+    }));
+    await saveRecordedPad(record);
+    renderPads();
+    renderSequencer();
+    renderSampleEditor();
+    persist();
+    announce('Sample name updated');
+  });
+  auditionButton?.addEventListener('click', auditionSample);
+  normalizeButton?.addEventListener('click', async () => {
+    const record = recordedPads.get(activeSampleSlot);
+    const buffer = engine.getRecordingBuffer(activeSampleSlot);
+    if (!record || !buffer) return;
+    const settings = sampleSettings(record);
+    const channel = buffer.getChannelData(0);
+    const start = Math.floor(settings.trimStart * buffer.sampleRate);
+    const end = Math.min(channel.length, Math.ceil(settings.trimEnd * buffer.sampleRate));
+    let peak = 0;
+    for (let index = start; index < end; index += 1) peak = Math.max(peak, Math.abs(channel[index]));
+    const gainDb = peak > 0 ? clamp(Math.round(20 * Math.log10(0.95 / peak)), -18, 12) : 0;
+    await saveActiveSample({ gainDb });
+    toast('Normalized to −1 dB peak', 'success');
+  });
+  [gainInput, fadeInInput, fadeOutInput, pitchInput].forEach((input) => input?.addEventListener('change', async () => {
+    const settings = {
+      gainDb: Number(gainInput.value),
+      fadeIn: Number(fadeInInput.value) / 1000,
+      fadeOut: Number(fadeOutInput.value) / 1000,
+      pitch: Number(pitchInput.value),
+    };
+    await saveActiveSample(settings);
+    announce('Sample settings saved');
+  }));
+  [gainInput, fadeInInput, fadeOutInput, pitchInput].forEach((input) => input?.addEventListener('input', () => {
+    document.getElementById('sample-gain-output').textContent = `${Number(gainInput.value) > 0 ? '+' : ''}${gainInput.value} dB`;
+    document.getElementById('sample-fade-in-output').textContent = `${fadeInInput.value} ms`;
+    document.getElementById('sample-fade-out-output').textContent = `${fadeOutInput.value} ms`;
+    document.getElementById('sample-pitch-output').textContent = `${Number(pitchInput.value) > 0 ? '+' : ''}${pitchInput.value} st`;
+  }));
+  reverseButton?.addEventListener('click', async () => {
+    const record = recordedPads.get(activeSampleSlot);
+    if (!record) return;
+    await saveActiveSample({ reverse: !sampleSettings(record).reverse });
+    announce(sampleSettings(record).reverse ? 'Reverse on' : 'Reverse off');
+  });
+  playbackModes?.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-mode]');
+    if (!button) return;
+    await saveActiveSample({ mode: button.dataset.mode });
+    announce(`${button.textContent} playback selected`);
+  });
+  waveformEditor?.querySelectorAll('.trim-handle').forEach((handle) => handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    const move = (moveEvent) => trimFromPointer(handle, moveEvent.clientX);
+    const finish = async () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', finish);
+      handle.removeEventListener('pointercancel', finish);
+      const record = recordedPads.get(activeSampleSlot);
+      if (record) await saveRecordedPad(record);
+      announce('Trim updated');
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+  }));
+  waveformEditor?.querySelectorAll('.trim-handle').forEach((handle) => handle.addEventListener('keydown', async (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const record = recordedPads.get(activeSampleSlot);
+    if (!record) return;
+    const settings = sampleSettings(record);
+    const delta = event.key === 'ArrowLeft' ? -0.01 : 0.01;
+    if (handle.dataset.trim === 'start') settings.trimStart = clamp(settings.trimStart + delta, 0, settings.trimEnd - 0.02);
+    else settings.trimEnd = clamp(settings.trimEnd + delta, settings.trimStart + 0.02, record.duration);
+    await saveActiveSample(settings);
+  }));
+  document.getElementById('duplicate-recording')?.addEventListener('click', duplicateActiveSample);
+  document.getElementById('move-recording')?.addEventListener('click', moveOrSwapActiveSample);
+  const replaceFile = document.getElementById('replace-recording-file');
+  document.getElementById('replace-recording')?.addEventListener('click', () => replaceFile.click());
+  replaceFile?.addEventListener('change', async () => {
+    await replaceActiveSample(replaceFile.files[0]);
+    replaceFile.value = '';
+  });
+  document.getElementById('delete-recording')?.addEventListener('click', (event) => {
+    if (!deleteSampleArmed) {
+      deleteSampleArmed = true;
+      event.currentTarget.textContent = 'Confirm delete';
+      toast('Press again to delete this recording');
+      window.setTimeout(() => {
+        deleteSampleArmed = false;
+        if (event.currentTarget) event.currentTarget.textContent = 'Delete recording';
+      }, 3200);
+      return;
+    }
+    const pad = padElements.find((item) => item.dataset.slot === activeSampleSlot);
+    closeSampleEditor();
+    clearRecordedPad(pad);
+  });
+
   document.getElementById('coach-dismiss').addEventListener('click', () => {
     document.querySelector('.pad-section').classList.add('coach-dismissed');
     document.getElementById('coach').remove();
@@ -923,6 +1592,16 @@ function wireEvents() {
     const pad = padElements.find((item) => item.dataset.key === key);
     if (pad) triggerPad(pad, event.repeat ? 0.65 : 1);
   });
+  document.addEventListener('keyup', (event) => {
+    const pad = padElements.find((item) => item.dataset.key === event.key.toLowerCase());
+    const playback = pad ? activePadPlaybacks.get(pad.dataset.slot) : null;
+    const record = pad ? recordedPads.get(pad.dataset.slot) : null;
+    if (playback && ['gate', 'loop'].includes(sampleSettings(record).mode)) {
+      playback.stop();
+      activePadPlaybacks.delete(pad.dataset.slot);
+      pad.classList.remove('is-hit');
+    }
+  });
   window.addEventListener('beforeunload', releaseInputStream);
 }
 
@@ -932,6 +1611,7 @@ async function restoreRecordings() {
     for (const record of records) {
       try {
         await engine.registerRecording(record.slot, record.blob);
+        Object.assign(record, normalizeSampleSettings(record, record.duration));
         recordedPads.set(record.slot, record);
       } catch {
         // Skip a damaged recording without blocking the studio.
@@ -946,8 +1626,7 @@ async function restoreRecordings() {
 function initialize() {
   decoratePadShells();
   decorateTrackControls();
-  state.customEvents = state.customEvents.filter((event) => Number.isInteger(event.step) && event.step >= 0 && event.step < 64 && (!Number.isFinite(event.offset) || (event.offset >= 0 && event.offset < 1)));
-  history = [structuredClone(state.customEvents)];
+  history = [sequenceSnapshot()];
   historyIndex = 0;
   bpmInput.value = String(state.bpm);
   metronomeButton.setAttribute('aria-pressed', String(state.metronome));
@@ -962,7 +1641,7 @@ function initialize() {
   renderBankButtons();
   renderPads();
   renderTrackStates();
-  renderOverdubMarkers();
+  renderSequencer();
   renderHistoryControls();
   wireEvents();
   restoreRecordings();

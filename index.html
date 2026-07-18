@@ -73,6 +73,7 @@
       --track-selected-fg: var(--accent);
       --track-selected-border: oklch(52% 0.08 50);
       --track-selected-bg: oklch(24% 0.04 50);
+      --sheet-shadow: oklch(5% 0.01 255 / .52);
       --font-display: "Avenir Next", "Segoe UI Variable Display", system-ui, sans-serif;
       --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
       --font-mono: "IBM Plex Mono", "Cascadia Mono", ui-monospace, monospace;
@@ -136,6 +137,7 @@
       --track-selected-fg: var(--fg);
       --track-selected-border: var(--accent);
       --track-selected-bg: var(--pad-recorded-bg);
+      --sheet-shadow: oklch(28% 0.03 255 / .26);
       --shadow-control: 0 1px 0 oklch(100% 0 0 / .82) inset, 0 5px 10px oklch(37% 0.025 70 / .18), 0 -3px 0 oklch(48% 0.03 65 / .32) inset;
     }
 
@@ -255,18 +257,25 @@
     .workspace {
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(430px, .88fr) minmax(520px, 1.12fr);
-      gap: 1px;
-      background: var(--border);
-      overflow: hidden;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(520px, 1fr);
+      gap: 16px;
+      padding: 16px 20px;
+      overflow: auto;
     }
-    .pad-section, .timeline-section { background: var(--bg); min-width: 0; min-height: 0; padding: 20px; }
-    .pad-section { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 14px; }
+    .pad-section, .timeline-section { background: var(--surface); min-width: 0; min-height: 0; padding: 16px; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 0 var(--control-highlight) inset; }
+    .pad-section { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 12px; }
     .pad-section.coach-dismissed { grid-template-rows: auto auto minmax(0, 1fr); }
-    .timeline-section { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; }
+    .timeline-section { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 0; padding: 0; overflow: hidden; }
+    .timeline-section > .section-heading { padding: 14px 16px; border-bottom: 1px solid var(--border); }
     .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
     .section-heading h1, .section-heading h2 { margin: 0; font: 700 clamp(18px, 1.5vw, 24px)/1.05 var(--font-display); letter-spacing: -.035em; }
     .section-meta { color: var(--muted); font-size: 12px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend i { width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--border-strong); }
+    .legend .preset-key { background: var(--accent); }
+    .legend .live-key { background: var(--functional); }
     .bank-tabs { display: flex; gap: 6px; }
     .bank-tab { border: 0; background: transparent; color: var(--muted); padding: 7px 10px; min-height: 34px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 700; }
     .bank-tab.active { background: var(--surface-raised); color: var(--fg); box-shadow: 0 -2px 0 var(--accent) inset; }
@@ -283,10 +292,13 @@
 
     .pad-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      grid-template-rows: repeat(3, minmax(86px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(12, minmax(112px, 1fr));
+      grid-template-rows: minmax(112px, 1fr);
+      gap: 10px;
       min-height: 0;
+      overflow-x: auto;
+      padding: 2px 2px 8px;
+      scrollbar-color: var(--border-strong) transparent;
     }
     .pad-shell { position: relative; min-width: 0; min-height: 0; }
     .pad {
@@ -318,6 +330,21 @@
       background: var(--surface); box-shadow: 0 1px 0 var(--control-highlight) inset;
       display: grid; grid-template-rows: 34px repeat(4, minmax(70px, 1fr));
     }
+    .timeline-scroll { min-height: 0; overflow: auto; scrollbar-color: var(--border-strong) transparent; }
+    .sequencer-tools { padding: 10px 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--border); }
+    .sequencer-tools .tool-button { min-height: 44px; padding: 0 12px; font-size: 12px; }
+    .sequencer-tools .danger { color: var(--record); }
+    .sequencer-tools [aria-pressed="true"], .segment button[aria-pressed="true"] { border-color: var(--functional); color: var(--functional); background: var(--functional-soft); box-shadow: inset 0 0 0 1px var(--functional); }
+    .toolbar-separator { width: 1px; height: 28px; background: var(--border); margin: 0 2px; }
+    .segment { display: inline-flex; }
+    .segment button { min-width: 44px; min-height: 44px; margin-left: -1px; border: 1px solid var(--border); border-radius: 0; background: var(--surface-raised); cursor: pointer; }
+    .segment button:first-child { margin-left: 0; border-radius: 9px 0 0 9px; }
+    .segment button:last-child { border-radius: 0 9px 9px 0; }
+    .selection-status { margin-left: auto; color: var(--muted); font: 12px var(--font-mono); }
+    .hit-inspector { min-height: 64px; padding: 9px 12px; display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--surface-raised) 45%, var(--surface)); }
+    .hit-inspector p { margin: 0; color: var(--muted); font-size: 12px; }
+    .field-inline { display: flex; align-items: center; gap: 9px; font-size: 12px; white-space: nowrap; }
+    .field-inline output { color: var(--muted); font: 11px var(--font-mono); }
     .ruler-row, .track { display: grid; grid-template-columns: 136px minmax(0, 1fr); min-width: 0; }
     .ruler-row { border-bottom: 1px solid var(--border); color: var(--muted); font: 600 10px/1 var(--font-mono); }
     .ruler-title { display: flex; align-items: center; padding: 0 12px; border-right: 1px solid var(--border); }
@@ -333,12 +360,21 @@
     .track-toggle[aria-pressed="true"] { color: var(--track-selected-fg); border-color: var(--track-selected-border); background: var(--track-selected-bg); }
     .volume { flex: 1; min-width: 30px; height: 3px; accent-color: var(--functional); }
     .lane {
-      position: relative; min-width: 0; overflow: hidden;
+      position: relative; min-width: 0; display: grid;
       background-image:
         linear-gradient(90deg, var(--border) 1px, transparent 1px),
         linear-gradient(90deg, var(--lane-subdivision) 1px, transparent 1px);
       background-size: 25% 100%, 6.25% 100%;
     }
+    .step-cell { min-width: 44px; min-height: 70px; padding: 0; border: 0; border-right: 1px solid color-mix(in oklch, var(--border) 48%, transparent); border-radius: 0; background: transparent; box-shadow: none; position: relative; cursor: pointer; }
+    .step-cell:nth-child(4n) { border-right-color: var(--border-strong); }
+    .step-cell:hover { background: color-mix(in oklch, var(--functional) 8%, transparent); }
+    .step-cell.has-hit::before { content: ""; position: absolute; left: 19%; right: 19%; bottom: 8px; height: calc(14px + var(--velocity, .7) * 37px); border-radius: 5px 5px 3px 3px; background: var(--accent); border: 1px solid color-mix(in oklch, var(--accent) 55%, var(--fg)); box-shadow: inset 0 -3px 0 color-mix(in oklch, var(--accent-strong) 70%, var(--bg)); }
+    .step-cell.live::before { background: var(--functional); border-style: dashed; border-color: color-mix(in oklch, var(--functional) 58%, var(--fg)); box-shadow: inset 0 -3px 0 color-mix(in oklch, var(--functional) 66%, var(--bg)); }
+    .step-cell.current { background: color-mix(in oklch, var(--functional) 15%, transparent); }
+    .step-cell.current > * { position: relative; z-index: 2; }
+    .step-cell.selected::after { content: ""; position: absolute; inset: 4px; border: 2px solid var(--functional); border-radius: 6px; box-shadow: 0 0 0 1px var(--bg); }
+    .hit-count { position: absolute; z-index: 2; top: 5px; right: 5px; min-width: 16px; height: 16px; display: grid; place-items: center; border-radius: 8px; background: var(--surface-raised); color: var(--fg); font: 9px var(--font-mono); }
     .clip { position: absolute; top: 10px; bottom: 10px; border-radius: 8px; background: var(--clip-warm-bg); border: 1px solid var(--clip-warm-border); overflow: hidden; }
     .clip.cool { background: var(--clip-cool-bg); border-color: var(--clip-cool-border); }
     .clip-label { position: absolute; left: 8px; top: 6px; font: 650 9px/1 var(--font-mono); color: var(--clip-warm-label); }
@@ -388,17 +424,16 @@
     .pad.capture-target { border-color: var(--record); box-shadow: var(--focus), var(--shadow-control); }
     .pad.is-drop-target { border-color: var(--functional); background: var(--functional-soft); transform: translateY(-2px); }
     .pad.user-recording .pad-name::after { content: " · REC"; color: var(--record); font: 700 8px/1 var(--font-mono); }
-    .pad-remove {
+    .pad-edit {
       display: none; position: absolute; z-index: 6; right: 8px; bottom: 8px;
-      width: 30px; height: 30px; padding: 0; border: 1px solid var(--border);
+      min-width: 44px; height: 44px; padding: 0 10px; border: 1px solid var(--border);
       border-radius: 10px; background: color-mix(in oklch, var(--surface-raised) 88%, transparent); color: var(--muted);
       cursor: pointer; box-shadow: 0 1px 0 var(--control-highlight) inset;
       opacity: .78; transition: opacity 140ms ease, color 140ms ease, border-color 140ms ease, background 140ms ease, transform 90ms ease;
     }
-    .pad-shell.has-user-recording .pad-remove { display: grid; place-items: center; }
-    .pad-remove svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .pad-remove:hover, .pad-remove:focus-visible { opacity: 1; color: var(--record); border-color: var(--record-border); background: var(--record-soft); transform: translateY(-1px); }
-    .pad-remove:active { transform: translateY(1px); }
+    .pad-shell.has-user-recording .pad-edit { display: grid; place-items: center; }
+    .pad-edit:hover, .pad-edit:focus-visible { opacity: 1; color: var(--functional); border-color: var(--functional); background: var(--functional-soft); transform: translateY(-1px); }
+    .pad-edit:active { transform: translateY(1px); }
     .track-clear { width: 24px; height: 24px; min-width: 24px; padding: 0; }
     .track.is-cleared .lane { opacity: .2; filter: saturate(0); }
     .track.is-cleared .track-title::after { content: " · CLEARED"; color: var(--muted); font: 700 8px/1 var(--font-mono); }
@@ -424,13 +459,53 @@
     .toast-error, .toast-record { border-color: var(--record); }
     .export-button[aria-busy="true"] { cursor: progress; }
 
+    .sample-scrim { position: fixed; inset: 0; z-index: 49; background: oklch(5% .01 255 / .56); opacity: 0; pointer-events: none; transition: opacity 160ms; }
+    .sample-scrim.open { opacity: 1; pointer-events: auto; }
+    .sample-sheet { position: fixed; z-index: 50; top: 0; right: 0; width: min(440px, 100%); height: 100dvh; padding: 0 18px 24px; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--border-strong); box-shadow: -24px 0 60px var(--sheet-shadow); transform: translateX(102%); transition: transform 180ms cubic-bezier(.2,.8,.2,1); }
+    .sample-sheet.open { transform: translateX(0); }
+    .sample-sheet-head { height: 64px; position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; background: var(--surface); border-bottom: 1px solid var(--border); }
+    .sample-sheet-title { min-width: 0; flex: 1; }
+    .sample-sheet-title strong { display: block; font-family: var(--font-display); }
+    .sample-sheet-title span { color: var(--muted); font: 11px var(--font-mono); }
+    .sample-section { padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .sample-section h3 { margin: 0 0 11px; font: 700 13px var(--font-display); }
+    .sample-name-field { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); color: var(--fg); padding: 0 10px; }
+    .waveform-editor { height: 150px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-pressed); touch-action: none; }
+    .waveform-bars { position: absolute; inset: 0 20px; display: flex; align-items: center; gap: 2px; }
+    .waveform-bars i { flex: 1; height: var(--h); min-width: 1px; border-radius: 2px; background: var(--accent); opacity: .8; }
+    .trim-shade { position: absolute; top: 0; bottom: 0; background: color-mix(in oklch, var(--bg) 70%, transparent); pointer-events: none; }
+    .trim-shade.left { left: 0; width: var(--trim-start, 0%); }
+    .trim-shade.right { right: 0; width: calc(100% - var(--trim-end, 100%)); }
+    .trim-handle { position: absolute; z-index: 3; top: 0; bottom: 0; width: 44px; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; touch-action: none; transform: translateX(-22px); }
+    .trim-handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: 21px; width: 2px; background: var(--functional); }
+    .trim-handle::after { content: ""; position: absolute; left: 15px; top: 8px; width: 14px; height: 22px; border: 1px solid var(--functional); border-radius: 4px; background: var(--surface-raised); }
+    .trim-handle.start { left: var(--trim-start, 0%); }
+    .trim-handle.end { left: var(--trim-end, 100%); }
+    .sample-play-cursor { position: absolute; left: var(--cursor, 0%); top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+    .wave-times { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font: 11px var(--font-mono); }
+    .sample-control-row { display: grid; grid-template-columns: 92px 1fr 58px; align-items: center; gap: 9px; min-height: 50px; font-size: 12px; }
+    .sample-control-row input { width: 100%; accent-color: var(--functional); }
+    .sample-control-row output { text-align: right; color: var(--muted); font: 11px var(--font-mono); }
+    .sample-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .sample-actions button, .sample-actions select { min-height: 44px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); color: var(--fg); }
+    .sample-actions .primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+    .sample-actions .danger { color: var(--record); }
+    .sample-actions .wide { grid-column: 1 / -1; }
+    .sample-hint { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .sample-mode { display: inline-flex; }
+    .sample-mode button { min-height: 44px; padding: 0 12px; margin-left: -1px; border: 1px solid var(--border); border-radius: 0; background: var(--surface-raised); }
+    .sample-mode button:first-child { margin-left: 0; border-radius: 9px 0 0 9px; }
+    .sample-mode button:last-child { border-radius: 0 9px 9px 0; }
+    .sample-mode button[aria-pressed="true"], #sample-reverse[aria-pressed="true"] { border-color: var(--functional); color: var(--functional); background: var(--functional-soft); box-shadow: inset 0 0 0 1px var(--functional); }
+
     @media (max-width: 1179px) {
       .studio { grid-template-rows: 56px auto auto 82px; }
       .input-strip { min-height: 72px; grid-template-columns: 1fr 1.3fr auto auto; }
-      .workspace { display: block; overflow: visible; }
-      .pad-section { min-height: 540px; border-bottom: 1px solid var(--border); grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+      .workspace { display: grid; overflow: visible; }
+      .pad-section { min-height: 250px; grid-template-rows: auto auto auto auto minmax(0, 1fr); }
       .pad-section.coach-dismissed { grid-template-rows: auto auto auto minmax(0, 1fr); }
       .timeline-section { min-height: 460px; }
+      .hit-inspector { grid-template-columns: 1fr; }
       .transport { position: sticky; bottom: 0; }
     }
 
@@ -449,8 +524,8 @@
       .input-strip { grid-template-columns: 1fr auto; min-height: 68px; padding: 8px 14px; gap: 12px; }
       .privacy-state { white-space: normal; }
       .meter-wrap, .monitor-button { display: none; }
-      .workspace { min-height: 0; overflow: auto; background: var(--bg); }
-      .pad-section { min-height: 100%; padding: 16px 14px 18px; grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+      .workspace { min-height: 0; overflow: auto; padding: 12px 10px; }
+      .pad-section { min-height: 560px; padding: 16px 14px 18px; grid-template-rows: auto auto auto auto minmax(0, 1fr); }
       .section-heading h1 { font-size: 20px; }
       .section-meta { display: none; }
       .bank-tabs { overflow-x: auto; scrollbar-width: none; }
@@ -459,7 +534,12 @@
       .pad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(78px, 1fr)); gap: 12px; }
       .pad-shell:nth-child(n+9) { display: none; }
       .pad { min-height: 78px; border-radius: 16px; }
-      .timeline-section { display: none; }
+      .timeline-section { display: grid; min-height: 520px; }
+      .timeline-section > .section-heading { align-items: flex-start; }
+      .sequencer-tools { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 12px; }
+      .toolbar-separator { flex: 0 0 1px; }
+      .selection-status { display: none; }
+      .hit-inspector { min-height: 78px; }
       .mobile-loop-rail { display: block; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
       .mobile-loop-rail::after { content: ""; display: block; height: 100%; width: var(--loop-progress, 0%); background: var(--functional); transition: width 60ms linear; }
       .transport { grid-template-columns: 1fr auto 1fr; gap: 8px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); min-height: 82px; }
@@ -471,6 +551,9 @@
       .transport-left .readout { min-width: 66px; }
       .readout-value { font-size: 16px; }
       .toast-stack { right: 14px; bottom: calc(94px + env(safe-area-inset-bottom)); }
+      .sample-sheet { top: auto; bottom: 0; width: 100%; height: min(82dvh, 690px); padding-inline: 16px; border-left: 0; border-top: 1px solid var(--border-strong); border-radius: 18px 18px 0 0; transform: translateY(102%); }
+      .sample-sheet::before { content: ""; display: block; position: sticky; top: 7px; z-index: 5; width: 42px; height: 4px; margin: 7px auto -11px; border-radius: 9px; background: var(--border-strong); }
+      .sample-sheet.open { transform: translateY(0); }
     }
 
     @media (max-width: 380px) {
@@ -589,23 +672,44 @@
 
       <section class="timeline-section" data-od-id="loop-timeline" aria-labelledby="timeline-heading">
         <div class="section-heading">
-          <div><div class="eyebrow">4-BAR LOOP · 01:02:03</div><h2 id="timeline-heading">Loop arrangement</h2></div>
-          <div class="timeline-tools"><label class="select-wrap">Quantize <select aria-label="Quantization"><option>1/16</option><option>1/8 swing</option><option>1/8</option><option>Off</option></select></label><button class="tool-button clear-overdubs" type="button" disabled>Clear overdubs</button></div>
+          <div><div class="eyebrow" id="loop-eyebrow">4-BAR LOOP · 1.1.1</div><h2 id="timeline-heading">Build the pocket</h2></div>
+          <div class="legend" aria-label="Hit types"><span><i class="preset-key"></i>Preset hit</span><span><i class="live-key"></i>Live overdub</span></div>
         </div>
-        <div class="timeline" id="timeline">
+        <div class="sequencer-tools" data-od-id="sequencer-toolbar">
+          <label class="field-inline">Pattern <select id="pattern-select"></select></label>
+          <button class="tool-button" id="select-mode" aria-pressed="false">Select hits</button>
+          <button class="tool-button" id="duplicate-selection" disabled>Duplicate</button>
+          <button class="tool-button danger" id="delete-selection" disabled>Delete</button>
+          <span class="toolbar-separator" aria-hidden="true"></span>
+          <button class="tool-button" id="quantize-selection">Quantize</button>
+          <label class="field-inline">Grid <select aria-label="Quantization"><option>1/16</option><option>1/8 swing</option><option>1/8</option><option>Off</option></select></label>
+          <span class="toolbar-separator" aria-hidden="true"></span>
+          <span class="eyebrow">BARS</span>
+          <div class="segment" id="bar-options" aria-label="Loop length"><button data-bars="1" aria-pressed="false">1</button><button data-bars="2" aria-pressed="false">2</button><button data-bars="4" aria-pressed="true">4</button><button data-bars="8" aria-pressed="false">8</button></div>
+          <span class="toolbar-separator" aria-hidden="true"></span>
+          <button class="tool-button" id="duplicate-pattern">Duplicate pattern</button>
+          <button class="tool-button danger clear-overdubs" type="button">Clear pattern</button>
+          <span class="selection-status" id="selection-status">No hits selected</span>
+        </div>
+        <div class="hit-inspector" data-od-id="hit-inspector">
+          <div><div class="eyebrow">HIT INSPECTOR</div><p id="inspector-copy">Turn on Select hits, then choose one or more steps.</p></div>
+          <label class="field-inline">Velocity <input id="hit-velocity" type="range" min="1" max="127" value="96" disabled><output id="hit-velocity-output">—</output></label>
+          <div class="field-inline"><span>Timing</span><button class="icon-button" id="nudge-left" disabled aria-label="Nudge selected hits earlier">−</button><output id="timing-output">0 ms</output><button class="icon-button" id="nudge-right" disabled aria-label="Nudge selected hits later">+</button></div>
+        </div>
+        <div class="timeline-scroll" data-od-id="step-grid-scroll"><div class="timeline" id="timeline">
           <div class="ruler-row"><div class="ruler-title">BAR / BEAT</div><div class="ruler"><span>1</span><span>2</span><span>3</span><span>4</span><div class="playhead" aria-hidden="true"></div></div></div>
           <div class="track" data-od-id="track-kicks"><div class="track-head"><div class="track-title">Kicks</div><div class="track-controls"><button class="track-toggle" aria-pressed="false" aria-label="Mute Kicks">M</button><button class="track-toggle" aria-pressed="false" aria-label="Solo Kicks">S</button><input class="volume" type="range" min="0" max="100" value="82" aria-label="Kicks volume"></div></div><div class="lane"><div class="clip" style="left:1%;width:48%"><span class="clip-label">KICK DEEP · 1.1</span><span class="clip-bars"><i style="--h:90%"></i><i style="--h:18%"></i><i style="--h:40%"></i><i style="--h:16%"></i><i style="--h:82%"></i><i style="--h:22%"></i><i style="--h:38%"></i><i style="--h:14%"></i></span></div><div class="clip" style="left:51%;width:48%"><span class="clip-label">KICK DEEP · 3.1</span><span class="clip-bars"><i style="--h:90%"></i><i style="--h:18%"></i><i style="--h:40%"></i><i style="--h:16%"></i><i style="--h:82%"></i><i style="--h:22%"></i></span></div></div></div>
           <div class="track" data-od-id="track-snares"><div class="track-head"><div class="track-title">Snares</div><div class="track-controls"><button class="track-toggle" aria-pressed="false" aria-label="Mute Snares">M</button><button class="track-toggle" aria-pressed="false" aria-label="Solo Snares">S</button><input class="volume" type="range" min="0" max="100" value="74" aria-label="Snares volume"></div></div><div class="lane"><div class="clip" style="left:13%;width:24%"><span class="clip-label">SNARE · 1.3</span><span class="clip-bars"><i style="--h:18%"></i><i style="--h:84%"></i><i style="--h:26%"></i><i style="--h:92%"></i><i style="--h:22%"></i></span></div><div class="clip" style="left:63%;width:24%"><span class="clip-label">SNARE · 3.3</span><span class="clip-bars"><i style="--h:18%"></i><i style="--h:84%"></i><i style="--h:26%"></i><i style="--h:92%"></i><i style="--h:22%"></i></span></div></div></div>
           <div class="track" data-od-id="track-hats"><div class="track-head"><div class="track-title">Hats & clicks</div><div class="track-controls"><button class="track-toggle" aria-pressed="false" aria-label="Mute Hats and clicks">M</button><button class="track-toggle" aria-pressed="false" aria-label="Solo Hats and clicks">S</button><input class="volume" type="range" min="0" max="100" value="64" aria-label="Hats and clicks volume"></div></div><div class="lane"><div class="clip cool" style="left:1%;width:98%"><span class="clip-label">CLOSED HAT · 1/8</span><span class="clip-bars"><i style="--h:44%"></i><i style="--h:28%"></i><i style="--h:54%"></i><i style="--h:24%"></i><i style="--h:46%"></i><i style="--h:30%"></i><i style="--h:58%"></i><i style="--h:26%"></i><i style="--h:48%"></i><i style="--h:30%"></i><i style="--h:55%"></i><i style="--h:24%"></i></span></div></div></div>
           <div class="track" data-od-id="track-bass"><div class="track-head"><div class="track-title">Throat bass</div><div class="track-controls"><button class="track-toggle" aria-pressed="false" aria-label="Mute Throat bass">M</button><button class="track-toggle" aria-pressed="false" aria-label="Solo Throat bass">S</button><input class="volume" type="range" min="0" max="100" value="68" aria-label="Throat bass volume"></div></div><div class="lane"><div class="clip cool" style="left:26%;width:23%"><span class="clip-label">BASS · 2.1</span><span class="clip-bars"><i style="--h:52%"></i><i style="--h:68%"></i><i style="--h:72%"></i><i style="--h:64%"></i><i style="--h:48%"></i></span></div><div class="clip cool" style="left:76%;width:23%"><span class="clip-label">BASS · 4.1</span><span class="clip-bars"><i style="--h:52%"></i><i style="--h:68%"></i><i style="--h:72%"></i><i style="--h:64%"></i><i style="--h:48%"></i></span></div></div></div>
-        </div>
+        </div></div>
       </section>
     </div>
 
     <footer class="transport" data-od-id="transport-controls" aria-label="Transport controls">
       <div class="transport-left">
         <div class="readout"><div class="readout-label">BPM</div><div class="readout-value"><input id="bpm" type="number" min="40" max="240" value="92" aria-label="Tempo in beats per minute"></div></div>
-        <div class="readout"><div class="readout-label">LOOP</div><div class="readout-value">4 <span style="font-size:10px;color:var(--muted);letter-spacing:0">bars</span></div></div>
+        <div class="readout"><div class="readout-label">LOOP</div><div class="readout-value" id="loop-bars-readout">4 <span style="font-size:10px;color:var(--muted);letter-spacing:0">bars</span></div></div>
         <button class="tool-button" id="metro" aria-pressed="true">Metronome</button>
       </div>
       <div class="transport-center">
@@ -620,6 +724,49 @@
       </div>
     </footer>
   </main>
+
+  <div class="sample-scrim" id="sample-scrim"></div>
+  <aside class="sample-sheet" id="sample-sheet" aria-labelledby="sample-sheet-heading" aria-hidden="true" data-od-id="sample-editor-sheet">
+    <div class="sample-sheet-head">
+      <div class="sample-sheet-title"><strong id="sample-sheet-heading">Edit recording</strong><span id="sample-meta">PAD · 0.00 S</span></div>
+      <button class="icon-button" id="close-sample-sheet" type="button" aria-label="Close sample editor">×</button>
+    </div>
+    <div class="sample-section">
+      <label><span class="eyebrow">SAMPLE NAME</span><input class="sample-name-field" id="sample-name" type="text" maxlength="24"></label>
+    </div>
+    <div class="sample-section">
+      <h3>Trim and audition</h3>
+      <div class="waveform-editor" id="waveform-editor" style="--trim-start:0%;--trim-end:100%;--cursor:0%" aria-label="Sample waveform with draggable trim handles">
+        <span class="waveform-bars" aria-hidden="true"></span><span class="trim-shade left"></span><span class="trim-shade right"></span>
+        <button class="trim-handle start" type="button" data-trim="start" aria-label="Trim start"></button><button class="trim-handle end" type="button" data-trim="end" aria-label="Trim end"></button><span class="sample-play-cursor"></span>
+      </div>
+      <div class="wave-times"><span id="trim-start-time">0.00 s</span><span id="trim-duration">0.00 s selected</span><span id="trim-end-time">0.00 s</span></div>
+      <div class="sample-actions" style="margin-top:12px"><button class="primary" id="sample-audition" type="button">▶ Audition</button><button id="sample-normalize" type="button">Normalize</button></div>
+    </div>
+    <div class="sample-section">
+      <h3>Sound</h3>
+      <label class="sample-control-row"><span>Gain</span><input id="sample-gain" type="range" min="-18" max="12" step="1" value="0"><output id="sample-gain-output">0 dB</output></label>
+      <label class="sample-control-row"><span>Fade in</span><input id="sample-fade-in" type="range" min="0" max="300" step="10" value="0"><output id="sample-fade-in-output">0 ms</output></label>
+      <label class="sample-control-row"><span>Fade out</span><input id="sample-fade-out" type="range" min="0" max="300" step="10" value="0"><output id="sample-fade-out-output">0 ms</output></label>
+      <label class="sample-control-row"><span>Pitch</span><input id="sample-pitch" type="range" min="-12" max="12" step="1" value="0"><output id="sample-pitch-output">0 st</output></label>
+      <button class="tool-button" id="sample-reverse" type="button" aria-pressed="false">Reverse audio</button>
+    </div>
+    <div class="sample-section">
+      <h3>Playback mode</h3>
+      <div class="sample-mode" id="sample-playback-mode"><button type="button" aria-pressed="true" data-mode="one-shot">One-shot</button><button type="button" aria-pressed="false" data-mode="gate">Gate</button><button type="button" aria-pressed="false" data-mode="loop">Loop</button></div>
+      <p class="sample-hint" id="sample-mode-hint">Plays the whole trimmed sound each time you trigger the pad.</p>
+    </div>
+    <div class="sample-section">
+      <h3>Pad actions</h3>
+      <div class="sample-actions">
+        <button id="duplicate-recording" type="button">Duplicate</button><select id="move-target" aria-label="Move or swap destination"></select>
+        <button id="move-recording" class="wide" type="button">Move / swap to selected pad</button>
+        <button id="replace-recording" class="wide" type="button">Replace recording</button><input class="sr-only" id="replace-recording-file" type="file" accept="audio/*">
+        <button id="delete-recording" class="wide danger" type="button">Delete recording</button>
+      </div>
+      <p class="sample-hint">Changes are non-destructive until export. Replace keeps the pad key and sequence hits.</p>
+    </div>
+  </aside>
 
   <div class="sr-only" id="live-region" aria-live="polite"></div>
   <script type="module" src="src/app.js"></script>

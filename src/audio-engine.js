@@ -16,6 +16,44 @@ function safeExp(param, value, time) {
   param.exponentialRampToValueAtTime(Math.max(0.0001, value), time);
 }
 
+export function dbToGain(db = 0) {
+  return 10 ** (Number(db) / 20);
+}
+
+export function pitchRate(semitones = 0) {
+  return 2 ** (Number(semitones) / 12);
+}
+
+export function normalizeSampleSettings(settings = {}, duration = 0) {
+  const safeDuration = Math.max(0.005, Number(duration) || 0.005);
+  const trimStart = Math.min(safeDuration - 0.005, Math.max(0, Number(settings.trimStart) || 0));
+  const trimEnd = Math.min(safeDuration, Math.max(trimStart + 0.005, Number(settings.trimEnd) || safeDuration));
+  const selectionDuration = trimEnd - trimStart;
+  return {
+    trimStart,
+    trimEnd,
+    fadeIn: Math.min(selectionDuration, Math.max(0, Number(settings.fadeIn) || 0)),
+    fadeOut: Math.min(selectionDuration, Math.max(0, Number(settings.fadeOut) || 0)),
+    gainDb: Math.min(12, Math.max(-18, Number(settings.gainDb) || 0)),
+    pitch: Math.min(12, Math.max(-12, Number(settings.pitch) || 0)),
+    reverse: Boolean(settings.reverse),
+    mode: ['one-shot', 'gate', 'loop'].includes(settings.mode) ? settings.mode : 'one-shot',
+  };
+}
+
+export function samplePlaybackWindow(settings = {}, duration = 0) {
+  const sample = normalizeSampleSettings(settings, duration);
+  const rate = pitchRate(sample.pitch);
+  const sourceDuration = sample.trimEnd - sample.trimStart;
+  return {
+    ...sample,
+    rate,
+    sourceDuration,
+    playbackDuration: sourceDuration / rate,
+    gain: dbToGain(sample.gainDb),
+  };
+}
+
 export class AudioEngine {
   constructor() {
     this.context = null;
@@ -25,6 +63,7 @@ export class AudioEngine {
     this.streamSource = null;
     this.noiseBuffers = new WeakMap();
     this.recordedBuffers = new Map();
+    this.reversedBuffers = new WeakMap();
   }
 
   async ensureReady({ resume = true } = {}) {
@@ -107,16 +146,66 @@ export class AudioEngine {
     this.recordedBuffers.delete(slot);
   }
 
+  reversedBuffer(buffer, context = this.context) {
+    if (this.reversedBuffers.has(buffer)) return this.reversedBuffers.get(buffer);
+    const reversed = context.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const source = buffer.getChannelData(channel);
+      const destination = reversed.getChannelData(channel);
+      for (let index = 0; index < source.length; index += 1) destination[index] = source[source.length - index - 1];
+    }
+    this.reversedBuffers.set(buffer, reversed);
+    return reversed;
+  }
+
+  playBuffer(context, destination, buffer, options = {}) {
+    const sample = samplePlaybackWindow(options.sample, buffer.duration);
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    const when = Math.max(context.currentTime ?? 0, options.when ?? context.currentTime ?? 0);
+    const playBuffer = sample.reverse ? this.reversedBuffer(buffer, context) : buffer;
+    const offset = sample.reverse ? buffer.duration - sample.trimEnd : sample.trimStart;
+    const shouldLoop = options.loop ?? sample.mode === 'loop';
+    const targetGain = Math.max(0.0001, (options.gain ?? 1) * sample.gain);
+    const playbackDuration = sample.playbackDuration;
+    const fadeIn = Math.min(playbackDuration / 2, sample.fadeIn / sample.rate);
+    const fadeOut = Math.min(playbackDuration / 2, sample.fadeOut / sample.rate);
+
+    source.buffer = playBuffer;
+    source.playbackRate.value = sample.rate;
+    source.loop = shouldLoop;
+    source.loopStart = offset;
+    source.loopEnd = offset + sample.sourceDuration;
+    source.connect(gain).connect(destination);
+
+    gain.gain.setValueAtTime(fadeIn && !shouldLoop ? 0.0001 : targetGain, when);
+    if (fadeIn && !shouldLoop) gain.gain.linearRampToValueAtTime(targetGain, when + fadeIn);
+    if (fadeOut && !shouldLoop) {
+      gain.gain.setValueAtTime(targetGain, Math.max(when + fadeIn, when + playbackDuration - fadeOut));
+      gain.gain.linearRampToValueAtTime(0.0001, when + playbackDuration);
+    }
+
+    if (typeof options.onEnded === 'function') source.addEventListener('ended', options.onEnded, { once: true });
+    if (shouldLoop) source.start(when, offset);
+    else source.start(when, offset, sample.sourceDuration);
+
+    let stopped = false;
+    return {
+      source,
+      gain,
+      duration: playbackDuration,
+      stop: (stopTime = context.currentTime ?? 0) => {
+        if (stopped) return;
+        stopped = true;
+        try { source.stop(stopTime); } catch {}
+      },
+    };
+  }
+
   playRecording(slot, options = {}) {
     const buffer = this.recordedBuffers.get(slot);
     if (!buffer || !this.context) return false;
-    const source = this.context.createBufferSource();
-    const gain = this.context.createGain();
-    source.buffer = buffer;
-    gain.gain.value = options.gain ?? 1;
-    source.connect(gain).connect(options.destination ?? this.master);
-    source.start(options.when ?? this.context.currentTime);
-    return true;
+    return this.playBuffer(this.context, options.destination ?? this.master, buffer, options);
   }
 
   play(type, options = {}) {
@@ -243,12 +332,12 @@ export class AudioEngine {
     master.connect(offline.destination);
     for (const event of events) {
       if (event.buffer) {
-        const source = offline.createBufferSource();
-        const gain = offline.createGain();
-        source.buffer = event.buffer;
-        gain.gain.value = event.gain ?? 1;
-        source.connect(gain).connect(master);
-        source.start(event.time);
+        this.playBuffer(offline, master, event.buffer, {
+          when: event.time,
+          gain: event.gain ?? 1,
+          sample: event.sample,
+          loop: false,
+        });
       } else {
         this.trigger(offline, master, event.type, event.time, event.gain ?? 1);
       }
