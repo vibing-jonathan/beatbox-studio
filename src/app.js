@@ -25,7 +25,7 @@ const saveState = document.querySelector('.save-state');
 const projectName = document.querySelector('.project-name');
 const exportButton = document.querySelector('.export-button');
 const shareButton = document.querySelector('.share-button');
-const addTrackButton = document.querySelector('[aria-label="Add track"]');
+const clearOverdubsButton = document.querySelector('.clear-overdubs');
 const undoButton = document.querySelector('[aria-label="Undo"]');
 const redoButton = document.querySelector('[aria-label="Redo"]');
 const micStatus = document.getElementById('mic-status');
@@ -70,6 +70,7 @@ const state = {
     volume: clamp(Number(stored.trackStates?.[index]?.volume) || Number(trackElements[index]?.querySelector('.volume')?.value) || 75, 0, 100),
     muted: Boolean(stored.trackStates?.[index]?.muted),
     solo: Boolean(stored.trackStates?.[index]?.solo),
+    cleared: Boolean(stored.trackStates?.[index]?.cleared),
   })),
   customEvents: Array.isArray(stored.customEvents) ? stored.customEvents : [],
 };
@@ -175,6 +176,33 @@ function padDefinition(index) {
   return { name: 'Record or drop', type: null, duration: 0, slot, recorded: false };
 }
 
+function decoratePadShells() {
+  padElements.forEach((pad) => {
+    if (pad.parentElement?.classList.contains('pad-shell')) return;
+    const shell = document.createElement('div');
+    shell.className = 'pad-shell';
+    pad.before(shell);
+    shell.append(pad);
+    const removeButton = document.createElement('button');
+    removeButton.className = 'pad-remove';
+    removeButton.type = 'button';
+    removeButton.textContent = '×';
+    shell.append(removeButton);
+  });
+}
+
+function decorateTrackControls() {
+  trackElements.forEach((track, index) => {
+    const controls = track.querySelector('.track-controls');
+    if (controls.querySelector('.track-clear')) return;
+    const button = document.createElement('button');
+    button.className = 'track-toggle track-clear';
+    button.type = 'button';
+    button.dataset.trackIndex = String(index);
+    controls.append(button);
+  });
+}
+
 function renderPads() {
   padElements.forEach((pad, index) => {
     const definition = padDefinition(index);
@@ -186,6 +214,7 @@ function renderPads() {
     pad.classList.toggle('empty', empty);
     pad.classList.toggle('recorded', !empty);
     pad.classList.toggle('user-recording', definition.recorded);
+    pad.parentElement.classList.toggle('has-user-recording', definition.recorded);
     pad.classList.toggle('capture-target', definition.slot === recordingTargetSlot);
     pad.setAttribute('aria-label', empty
       ? `Empty pad, keyboard ${key.toUpperCase()}. Record or drop audio.`
@@ -193,6 +222,9 @@ function renderPads() {
     pad.querySelector('.pad-name').textContent = definition.name;
     pad.querySelector('.keycap').textContent = key.toUpperCase();
     pad.querySelector('.pad-meta').textContent = empty ? 'EMPTY' : `${definition.duration.toFixed(2)} s`;
+    const removeButton = pad.parentElement.querySelector('.pad-remove');
+    removeButton.setAttribute('aria-label', definition.recorded ? `Delete ${definition.name} from pad ${key.toUpperCase()}` : 'Delete recording');
+    removeButton.title = definition.recorded ? `Delete ${definition.name}` : '';
     let wave = pad.querySelector('.pad-wave');
     if (!empty && !wave) {
       wave = document.createElement('span');
@@ -222,11 +254,16 @@ function renderTrackStates() {
     const trackState = state.trackStates[index];
     const [mute, solo] = track.querySelectorAll('.track-toggle');
     const volume = track.querySelector('.volume');
+    const clearButton = track.querySelector('.track-clear');
     mute.setAttribute('aria-pressed', String(trackState.muted));
     solo.setAttribute('aria-pressed', String(trackState.solo));
     volume.value = String(trackState.volume);
     track.classList.toggle('is-muted', trackState.muted);
     track.classList.toggle('is-solo', trackState.solo);
+    track.classList.toggle('is-cleared', trackState.cleared);
+    clearButton.textContent = trackState.cleared ? '↺' : '×';
+    clearButton.setAttribute('aria-label', `${trackState.cleared ? 'Restore' : 'Clear'} ${TRACKS[index].id} track`);
+    clearButton.title = trackState.cleared ? 'Restore track' : 'Clear track';
   });
 }
 
@@ -250,6 +287,7 @@ function renderOverdubMarkers() {
 function renderHistoryControls() {
   undoButton.disabled = historyIndex === 0;
   redoButton.disabled = historyIndex >= history.length - 1;
+  clearOverdubsButton.disabled = state.customEvents.length === 0;
 }
 
 function commitHistory(events) {
@@ -290,7 +328,7 @@ function formatPosition(step) {
 function activeTrack(index) {
   const anySolo = state.trackStates.some((track) => track.solo);
   const track = state.trackStates[index];
-  return !track.muted && (!anySolo || track.solo);
+  return !track.cleared && !track.muted && (!anySolo || track.solo);
 }
 
 function swingDelayForStep(step) {
@@ -568,7 +606,7 @@ async function finalizeInputRecording() {
     renderPads();
     micStatus.textContent = `${record.name} saved to pad ${key}`;
     privacyLabel.textContent = 'Saved locally';
-    toast(`${record.name} saved`, 'success');
+    toast(`${record.name} saved · use × on the pad to delete`, 'success', 4800);
     announce(`${record.name} saved and ready to play`);
   } catch (error) {
     toast(error.message, 'error');
@@ -598,7 +636,7 @@ async function importAudioFile(file, pad) {
     recordedPads.set(slot, record);
     await saveRecordedPad(record);
     renderPads();
-    toast(`${record.name} loaded`, 'success');
+    toast(`${record.name} loaded · use × on the pad to delete`, 'success', 4800);
     announce(`${record.name} loaded onto pad ${pad.dataset.key.toUpperCase()}`);
   } catch {
     toast('This audio file could not be decoded.', 'error');
@@ -625,6 +663,21 @@ async function clearRecordedPad(pad) {
   } catch {
     toast('The recording could not be cleared.', 'error');
   }
+}
+
+function requestClearRecordedPad(pad) {
+  const record = recordedPads.get(pad.dataset.slot);
+  if (!record) return;
+  const confirmed = window.confirm(`Delete “${record.name}”?\n\nThis removes the local recording and its overdub hits. This cannot be undone.`);
+  if (confirmed) clearRecordedPad(pad);
+}
+
+function clearAllOverdubs() {
+  if (!state.customEvents.length) return;
+  const count = state.customEvents.length;
+  commitHistory([]);
+  toast(`${count} overdub ${count === 1 ? 'hit' : 'hits'} cleared · Undo is available`);
+  announce('All overdub hits cleared. Use Undo to restore them.');
 }
 
 function collectLoopEvents(includeRecorded = true) {
@@ -730,9 +783,10 @@ function wireEvents() {
     pad.addEventListener('keydown', (event) => {
       if ((event.key === 'Delete' || event.key === 'Backspace') && recordedPads.has(pad.dataset.slot)) {
         event.preventDefault();
-        clearRecordedPad(pad);
+        requestClearRecordedPad(pad);
       }
     });
+    pad.parentElement.querySelector('.pad-remove').addEventListener('click', () => requestClearRecordedPad(pad));
   });
 
   bankButtons.forEach((button) => button.addEventListener('click', () => {
@@ -750,10 +804,7 @@ function wireEvents() {
   inputRecord.addEventListener('click', toggleInputRecording);
   exportButton.addEventListener('click', exportLoop);
   shareButton.addEventListener('click', shareStudio);
-  addTrackButton.addEventListener('click', () => {
-    toast('Overdub lane armed — press record, then play any pad.', 'success', 4400);
-    recordButton.focus();
-  });
+  clearOverdubsButton.addEventListener('click', clearAllOverdubs);
   undoButton.addEventListener('click', undo);
   redoButton.addEventListener('click', redo);
   projectName.addEventListener('dblclick', beginProjectRename);
@@ -820,6 +871,14 @@ function wireEvents() {
       state.trackStates[index].volume = Number(volume.value);
       persist();
     });
+    track.querySelector('.track-clear').addEventListener('click', () => {
+      state.trackStates[index].cleared = !state.trackStates[index].cleared;
+      renderTrackStates();
+      persist();
+      const action = state.trackStates[index].cleared ? 'cleared' : 'restored';
+      toast(`${track.querySelector('.track-title').childNodes[0].textContent.trim()} ${action}`);
+      announce(`${TRACKS[index].id} track ${action}`);
+    });
   });
 
   document.getElementById('coach-dismiss').addEventListener('click', () => {
@@ -865,6 +924,8 @@ async function restoreRecordings() {
 }
 
 function initialize() {
+  decoratePadShells();
+  decorateTrackControls();
   state.customEvents = state.customEvents.filter((event) => Number.isInteger(event.step) && event.step >= 0 && event.step < 64);
   history = [structuredClone(state.customEvents)];
   historyIndex = 0;

@@ -287,8 +287,9 @@
       gap: 12px;
       min-height: 0;
     }
+    .pad-shell { position: relative; min-width: 0; min-height: 0; }
     .pad {
-      position: relative; min-width: 0; min-height: 86px; overflow: hidden;
+      position: relative; width: 100%; height: 100%; min-width: 0; min-height: 86px; overflow: hidden;
       border: 1px solid var(--border-strong); border-radius: 18px;
       background: var(--surface-raised); color: var(--fg); text-align: left;
       padding: 14px 13px 15px; cursor: pointer;
@@ -386,6 +387,20 @@
     .pad.capture-target { border-color: var(--record); box-shadow: var(--focus), var(--shadow-control); }
     .pad.is-drop-target { border-color: var(--functional); background: var(--functional-soft); transform: translateY(-2px); }
     .pad.user-recording .pad-name::after { content: " · REC"; color: var(--record); font: 700 8px/1 var(--font-mono); }
+    .pad-remove {
+      display: none; position: absolute; z-index: 6; right: 8px; bottom: 8px;
+      width: 28px; height: 28px; padding: 0; border: 1px solid var(--record-border);
+      border-radius: 8px; background: var(--surface-raised); color: var(--record);
+      font: 700 16px/1 var(--font-display); cursor: pointer; box-shadow: var(--shadow-control);
+    }
+    .pad-shell.has-user-recording .pad-remove { display: grid; place-items: center; }
+    .pad-shell.has-user-recording .pad { padding-right: 42px; }
+    .pad-remove:hover { background: var(--record-soft); }
+    .track-clear { width: 24px; height: 24px; min-width: 24px; padding: 0; }
+    .track.is-cleared .lane { opacity: .2; filter: saturate(0); }
+    .track.is-cleared .track-title::after { content: " · CLEARED"; color: var(--muted); font: 700 8px/1 var(--font-mono); }
+    .clear-overdubs { min-height: 36px; padding: 0 10px; font-size: 11px; }
+    .clear-overdubs:disabled, .track-clear:disabled { opacity: .42; cursor: not-allowed; }
     .input-record.recording { animation: recording-pulse 1.2s ease-in-out infinite; }
     @keyframes recording-pulse { 50% { box-shadow: 0 0 0 8px var(--record-halo); } }
     .project-name[contenteditable="true"] { min-width: 140px; padding: 6px 8px; margin-left: -6px; border-radius: 7px; background: var(--surface-raised); box-shadow: var(--focus); color: var(--fg); }
@@ -438,7 +453,7 @@
       .bank-tabs::-webkit-scrollbar { display: none; }
       .coach { font-size: 11px; }
       .pad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(4, minmax(78px, 1fr)); gap: 12px; }
-      .pad:nth-child(n+9) { display: none; }
+      .pad-shell:nth-child(n+9) { display: none; }
       .pad { min-height: 78px; border-radius: 16px; }
       .timeline-section { display: none; }
       .mobile-loop-rail { display: block; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
@@ -571,7 +586,7 @@
       <section class="timeline-section" data-od-id="loop-timeline" aria-labelledby="timeline-heading">
         <div class="section-heading">
           <div><div class="eyebrow">4-BAR LOOP · 01:02:03</div><h2 id="timeline-heading">Loop arrangement</h2></div>
-          <div class="timeline-tools"><label class="select-wrap">Quantize <select aria-label="Quantization"><option>1/16</option><option>1/8 swing</option><option>1/8</option><option>Off</option></select></label><button class="icon-button" aria-label="Add track" title="Add track">+</button></div>
+          <div class="timeline-tools"><label class="select-wrap">Quantize <select aria-label="Quantization"><option>1/16</option><option>1/8 swing</option><option>1/8</option><option>Off</option></select></label><button class="tool-button clear-overdubs" type="button" disabled>Clear overdubs</button></div>
         </div>
         <div class="timeline" id="timeline">
           <div class="ruler-row"><div class="ruler-title">BAR / BEAT</div><div class="ruler"><span>1</span><span>2</span><span>3</span><span>4</span><div class="playhead" aria-hidden="true"></div></div></div>
