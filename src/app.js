@@ -9,6 +9,7 @@ import {
   quantizeEvent,
   trackIdForType,
 } from './sequencer.js';
+import { findNextEmptySlot, normalizationGainDb, remapPatternEventSlots, waveformPeaks } from './sample-editor.js';
 
 const engine = new AudioEngine();
 const padElements = [...document.querySelectorAll('.pad')];
@@ -144,6 +145,7 @@ let auditionStartedAt = 0;
 let velocitySnapshot = null;
 let deleteSampleArmed = false;
 let lastVisualStep = -1;
+let sampleReturnFocus = null;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -1025,27 +1027,13 @@ function duplicatePattern() {
   toast(`Pattern duplicated as ${name}`);
 }
 
-function waveformBars(buffer, count = 84) {
-  if (!buffer) return Array.from({ length: count }, (_, index) => 18 + ((index * 37) % 72));
-  const channel = buffer.getChannelData(0);
-  const size = Math.max(1, Math.floor(channel.length / count));
-  const peaks = [];
-  for (let index = 0; index < count; index += 1) {
-    let peak = 0;
-    const start = index * size;
-    const end = Math.min(channel.length, start + size);
-    for (let sample = start; sample < end; sample += 1) peak = Math.max(peak, Math.abs(channel[sample]));
-    peaks.push(Math.max(8, Math.round(peak * 100)));
-  }
-  return peaks;
-}
-
 function populateMoveTargets() {
   if (!moveTargetSelect || !activeSampleSlot) return;
   moveTargetSelect.innerHTML = Object.keys(BANKS).flatMap((bank) => KEYS.map((key) => {
     const slot = slotFor(bank, key);
     if (slot === activeSampleSlot) return '';
     const recording = recordedPads.get(slot);
+    if (!recording && BANKS[bank][KEYS.indexOf(key)]) return '';
     return `<option value="${slot}">${bank} · ${key.toUpperCase()}${recording ? ` · swap with ${recording.name}` : ''}</option>`;
   })).join('');
 }
@@ -1060,7 +1048,7 @@ function renderSampleEditor() {
   waveformEditor.style.setProperty('--trim-start', `${startPercent}%`);
   waveformEditor.style.setProperty('--trim-end', `${endPercent}%`);
   waveformEditor.style.setProperty('--cursor', `${startPercent}%`);
-  waveformEditor.querySelector('.waveform-bars').innerHTML = waveformBars(buffer).map((height) => `<i style="--h:${height}%"></i>`).join('');
+  waveformEditor.querySelector('.waveform-bars').innerHTML = waveformPeaks(buffer).map((height) => `<i style="--h:${height}%"></i>`).join('');
   sampleNameInput.value = record.name;
   sampleMeta.textContent = `${record.slot.replace(':', ' · PAD ')} · ${record.duration.toFixed(2)} S`;
   document.getElementById('trim-start-time').textContent = `${settings.trimStart.toFixed(2)} s`;
@@ -1124,6 +1112,7 @@ async function auditionSample() {
 
 function openSampleEditor(slot) {
   if (!recordedPads.has(slot)) return;
+  sampleReturnFocus = document.activeElement;
   activeSampleSlot = slot;
   deleteSampleArmed = false;
   document.getElementById('delete-recording').textContent = 'Delete recording';
@@ -1140,6 +1129,8 @@ function closeSampleEditor() {
   sampleScrim.classList.remove('open');
   sampleSheet.setAttribute('aria-hidden', 'true');
   activeSampleSlot = null;
+  if (sampleReturnFocus?.isConnected) sampleReturnFocus.focus();
+  sampleReturnFocus = null;
 }
 
 async function saveActiveSample(settings, { redraw = true } = {}) {
@@ -1166,8 +1157,7 @@ function trimFromPointer(handle, clientX) {
 
 async function duplicateActiveSample() {
   const record = recordedPads.get(activeSampleSlot);
-  const targets = Object.keys(BANKS).flatMap((bank) => KEYS.map((key) => slotFor(bank, key)));
-  const target = targets.find((slot) => !recordedPads.has(slot) && slot !== activeSampleSlot);
+  const target = findNextEmptySlot(BANKS, KEYS, recordedPads.keys(), activeSampleSlot);
   if (!record || !target) {
     toast('No empty pad is available.', 'error');
     return;
@@ -1182,13 +1172,7 @@ async function duplicateActiveSample() {
 }
 
 function remapEventSlots(from, to, swapFrom = null) {
-  state.patterns.forEach((pattern) => {
-    pattern.events.forEach((event) => {
-      if (event.slot === from) event.slot = '__moving__';
-      else if (swapFrom && event.slot === to) event.slot = from;
-    });
-    pattern.events.forEach((event) => { if (event.slot === '__moving__') event.slot = to; });
-  });
+  remapPatternEventSlots(state.patterns, from, to, Boolean(swapFrom));
 }
 
 async function moveOrSwapActiveSample() {
@@ -1395,6 +1379,7 @@ function wireEvents() {
   nudgeLeftButton?.addEventListener('click', () => nudgeSelection(-1));
   nudgeRightButton?.addEventListener('click', () => nudgeSelection(1));
   velocityInput?.addEventListener('pointerdown', () => { velocitySnapshot = sequenceSnapshot(); });
+  velocityInput?.addEventListener('focus', () => { if (!velocitySnapshot) velocitySnapshot = sequenceSnapshot(); });
   velocityInput?.addEventListener('input', () => {
     const velocity = Number(velocityInput.value) / 127;
     activePattern().events = currentEvents().map((event) => selectedEventIds.has(event.id) ? { ...event, velocity } : event);
@@ -1481,12 +1466,7 @@ function wireEvents() {
     const buffer = engine.getRecordingBuffer(activeSampleSlot);
     if (!record || !buffer) return;
     const settings = sampleSettings(record);
-    const channel = buffer.getChannelData(0);
-    const start = Math.floor(settings.trimStart * buffer.sampleRate);
-    const end = Math.min(channel.length, Math.ceil(settings.trimEnd * buffer.sampleRate));
-    let peak = 0;
-    for (let index = start; index < end; index += 1) peak = Math.max(peak, Math.abs(channel[index]));
-    const gainDb = peak > 0 ? clamp(Math.round(20 * Math.log10(0.95 / peak)), -18, 12) : 0;
+    const gainDb = normalizationGainDb(buffer, settings.trimStart, settings.trimEnd);
     await saveActiveSample({ gainDb });
     toast('Normalized to −1 dB peak', 'success');
   });
@@ -1576,12 +1556,22 @@ function wireEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && sampleSheet?.classList.contains('open')) {
+      event.preventDefault();
+      closeSampleEditor();
+      return;
+    }
     const target = event.target;
     if (target.matches('input, select, textarea') || target.isContentEditable) return;
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && key === 'z') {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEventIds.size) {
+      event.preventDefault();
+      deleteSelection();
       return;
     }
     if (key === ' ') {
