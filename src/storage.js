@@ -26,6 +26,41 @@ function openDatabase() {
   });
 }
 
+function readDatabaseRecord(db, storeName, key) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readonly');
+    const request = transaction.objectStore(storeName).get(key);
+    let result = null;
+    request.onsuccess = () => { result = request.result ?? null; };
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve(result);
+    transaction.onabort = () => reject(transaction.error ?? request.error ?? new Error('The local database read was interrupted.'));
+    transaction.onerror = () => reject(transaction.error ?? request.error ?? new Error('The local database read failed.'));
+  });
+}
+
+function putDatabaseRecord(db, storeName, value) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readwrite');
+    const request = transaction.objectStore(storeName).put(value);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve(value);
+    transaction.onabort = () => reject(transaction.error ?? request.error ?? new Error('The local database write was interrupted.'));
+    transaction.onerror = () => reject(transaction.error ?? request.error ?? new Error('The local database write failed.'));
+  });
+}
+
+function deleteDatabaseRecord(db, storeName, key) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, 'readwrite');
+    const request = transaction.objectStore(storeName).delete(key);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? request.error ?? new Error('The local database cleanup was interrupted.'));
+    transaction.onerror = () => reject(transaction.error ?? request.error ?? new Error('The local database cleanup failed.'));
+  });
+}
+
 export async function loadRecordedPads() {
   if (!('indexedDB' in window)) return [];
   const db = await openDatabase();
@@ -132,27 +167,29 @@ export async function saveProjectSession(project, { createRecovery = true } = {}
     createdAt: Number(project.createdAt) || Date.now(),
     updatedAt: Number(project.updatedAt) || Date.now(),
   };
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction([PROJECT_STORE, RECOVERY_STORE], 'readwrite');
-    const projects = transaction.objectStore(PROJECT_STORE);
-    const recovery = transaction.objectStore(RECOVERY_STORE);
-    const previous = projects.get(saved.id);
-    previous.onsuccess = () => {
-      if (createRecovery && previous.result && Number(previous.result.updatedAt) !== Number(saved.updatedAt)) {
-        recovery.put({ projectId: saved.id, project: previous.result, savedAt: Date.now() });
+  try {
+    let previous = null;
+    if (createRecovery) {
+      try { previous = await readDatabaseRecord(db, PROJECT_STORE, saved.id); } catch { /* recovery is best effort */ }
+    }
+    if (previous && Number(previous.updatedAt) !== Number(saved.updatedAt)) {
+      try {
+        await putDatabaseRecord(db, RECOVERY_STORE, {
+          projectId: saved.id,
+          project: previous,
+          savedAt: Date.now(),
+        });
+      } catch {
+        // Recovery is secondary to the live project. If it cannot be replaced
+        // (most commonly because storage is full), discard it and keep saving.
+        try { await deleteDatabaseRecord(db, RECOVERY_STORE, saved.id); } catch { /* best effort */ }
       }
-      projects.put(saved);
-    };
-    previous.onerror = () => reject(previous.error);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve(saved);
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error);
-    };
-  });
+    }
+    await putDatabaseRecord(db, PROJECT_STORE, saved);
+    return saved;
+  } finally {
+    db.close();
+  }
 }
 
 export async function loadProjectRecovery(projectId) {

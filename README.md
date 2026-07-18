@@ -20,6 +20,7 @@ Run the dependency-free audio export test with:
 node tests/audio-engine.test.mjs
 node tests/mixer.test.mjs
 node tests/project-session.test.mjs
+node tests/save-queue.test.mjs
 node tests/sample-editor.test.mjs
 node tests/sequencer.test.mjs
 node tests/timing.test.mjs

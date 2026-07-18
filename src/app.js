@@ -13,6 +13,7 @@ import {
   saveSettings,
   setActiveProjectId,
 } from './storage.js';
+import { RecoverableSaveQueue } from './save-queue.js';
 import {
   cleanProjectName,
   createProjectRecord,
@@ -189,7 +190,7 @@ let lastVisualStep = -1;
 let sampleReturnFocus = null;
 let activeProjectId = null;
 let activeProjectCreatedAt = Date.now();
-let projectSavePromise = Promise.resolve();
+const projectSaveQueue = new RecoverableSaveQueue();
 let projectCache = [];
 let projectReturnFocus = null;
 let pendingDeleteProjectId = null;
@@ -346,8 +347,7 @@ async function flushProjectSave({ createRecovery = true } = {}) {
     return projectCache.find((project) => project.id === activeProjectId) ?? currentProjectRecord();
   }
   const snapshot = currentProjectRecord();
-  projectSavePromise = projectSavePromise.then(() => saveProjectSession(snapshot, { createRecovery }));
-  const saved = await projectSavePromise;
+  const saved = await projectSaveQueue.enqueue(() => saveProjectSession(snapshot, { createRecovery }));
   lastProjectFingerprint = fingerprint;
   const existingIndex = projectCache.findIndex((project) => project.id === saved.id);
   if (existingIndex >= 0) projectCache[existingIndex] = saved;
@@ -364,9 +364,12 @@ function persist() {
     try {
       await flushProjectSave();
       setSaveLabel('Saved just now · on this device');
-    } catch {
+    } catch (error) {
       setSaveLabel('Save failed');
-      toast('This session could not be saved locally.', 'error');
+      const message = error?.name === 'QuotaExceededError'
+        ? 'Local storage is full. Your edits are still open; export this session before clearing space.'
+        : 'Saving was interrupted. Your edits are still open and the next change will retry.';
+      toast(message, 'error', 5200);
     }
   }, 260);
 }
@@ -1662,10 +1665,17 @@ async function initializeProjectSession() {
 
 async function openProjectLibrary() {
   projectReturnFocus = document.activeElement;
-  await flushProjectSave();
+  let saveError = null;
+  try {
+    await flushProjectSave();
+  } catch (error) {
+    saveError = error;
+  }
   await refreshProjectCache();
   await updateProjectRecovery();
-  showProjectError();
+  showProjectError(saveError
+    ? 'The current edits are still open but have not been saved. You can export them or retry after making another change.'
+    : '');
   projectSheet.classList.add('open');
   projectScrim.classList.add('open');
   projectSheet.setAttribute('aria-hidden', 'false');
@@ -1978,7 +1988,12 @@ function wireEvents() {
     if (!actionButton || !item) return;
     const projectId = item.dataset.projectId;
     if (actionButton.dataset.projectAction === 'open') {
-      await flushProjectSave();
+      try {
+        await flushProjectSave();
+      } catch {
+        showProjectError('This session is still open but has unsaved edits. Make another change to retry before switching sessions.');
+        return;
+      }
       await loadProjectIntoStudio(projectCache.find((project) => project.id === projectId));
       closeProjectLibrary();
     }
