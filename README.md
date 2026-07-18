@@ -33,7 +33,7 @@ node tests/timing.test.mjs
 - Editable 1, 2, 4, or 8-bar step sequencer with draw/erase, multi-selection, velocity, timing nudge, duplication, quantize, patterns, history, mute, solo, and track volume
 - Microphone recording directly into pads, plus audio file drag and drop
 - Non-destructive recorded-pad editor with waveform trim, gain/normalize, fades, pitch, reverse, one-shot/gate/loop modes, duplicate, move/swap, replace, and delete
-- Local project library with autosave, search, rename, duplicate, two-step deletion, previous-save recovery, and versioned `.beatbox` import/export
+- Local project library with explicit Save, unsaved-change warnings, search, rename, duplicate, two-step deletion, and versioned `.beatbox` import/export
 - Four-channel mixer plus master with stereo metering, mute/solo, pan, faders, three-band EQ, compression, reverb/delay sends, bypass, reset, balance, and limiting
 - Offline loop-length-aware WAV export that renders the complete mixer/effects graph, plus native share support
 - Responsive sequencer, horizontally scrolling mobile mixer, and mobile sample/project sheets with light and dark themes
@@ -45,6 +45,7 @@ node tests/timing.test.mjs
 - `Space`: play or pause
 - `Ctrl/Cmd+Z`: undo an edit
 - `Ctrl/Cmd+Shift+Z`: redo an edit
+- `Ctrl/Cmd+S`: save the active project locally
 - `Delete`: remove selected sequencer hits
 - Use **Edit** on a user-recorded pad to open its sample editor and pad actions
 - Use **Sequence / Mix** in the top bar to switch between pattern editing and channel mixing
@@ -55,4 +56,4 @@ node tests/timing.test.mjs
 
 ## Privacy and browser support
 
-Microphone audio stays on the device. Recordings are stored in IndexedDB and are only included in a downloaded WAV when you explicitly export. A current Chromium, Firefox, or Safari release is recommended. Microphone access requires `localhost` or HTTPS.
+Microphone audio stays on the device. Recordings remain in memory until you explicitly save the project, then they are stored in IndexedDB. They are only included in a downloaded WAV when you explicitly export. A current Chromium, Firefox, or Safari release is recommended. Microphone access requires `localhost` or HTTPS.

@@ -25,7 +25,7 @@ This implementation follows the editing prototype generated in the existing Beat
 
 - The project name opens a 460 px desktop sheet and an 88dvh mobile bottom sheet containing recent local sessions.
 - Search, create, inline rename, independent duplicate, and two-step inline deletion are available without native dialogs.
-- Autosave stores project settings and recorded audio in IndexedDB, with a recoverable previous save and a visible device-local status.
+- Explicit Save stores project settings and recorded audio in IndexedDB, with a visible dirty state and an unsaved-change warning before leaving.
 - Versioned `.beatbox` bundles include sequence, pad audio, sample edits, mixer state, and effects. Import validates the bundle and offers Keep both, Replace, or Cancel when names conflict.
 
 ## Mixer and effects

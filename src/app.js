@@ -7,9 +7,7 @@ import {
   loadProjectSession,
   loadRecordedPads,
   loadSettings,
-  removeRecordedPad,
   saveProjectSession,
-  saveRecordedPad,
   saveSettings,
   setActiveProjectId,
 } from './storage.js';
@@ -56,6 +54,7 @@ const metronomeButton = document.getElementById('metro');
 const countInButton = document.getElementById('count-in');
 const quantizeSelect = document.querySelector('[aria-label="Quantization"]');
 const saveState = document.querySelector('.save-state');
+const saveProjectButton = document.getElementById('save-project');
 const projectName = document.querySelector('.project-name');
 const exportButton = document.querySelector('.export-button');
 const shareButton = document.querySelector('.share-button');
@@ -174,7 +173,6 @@ let recordingTimer = null;
 let recordingTargetSlot = null;
 let history = [sequenceSnapshot()];
 let historyIndex = 0;
-let saveTimer = null;
 let toastStack = null;
 const recordedPads = new Map();
 const selectedEventIds = new Set();
@@ -276,7 +274,11 @@ function toast(message, tone = 'neutral', duration = 3200) {
 function setSaveLabel(text, busy = false) {
   if (!saveState) return;
   saveState.classList.toggle('is-saving', busy);
+  saveState.classList.toggle('is-dirty', text === 'Unsaved changes' || text === 'Save failed');
   saveState.lastChild.textContent = text;
+  if (saveProjectButton) {
+    saveProjectButton.disabled = busy || !activeProjectId || !['Unsaved changes', 'Save failed'].includes(text);
+  }
 }
 
 function currentSettings() {
@@ -340,6 +342,10 @@ function currentProjectFingerprint() {
   });
 }
 
+function hasUnsavedProjectChanges() {
+  return Boolean(activeProjectId && currentProjectFingerprint() !== lastProjectFingerprint);
+}
+
 async function flushProjectSave({ createRecovery = true } = {}) {
   if (!activeProjectId) return null;
   const fingerprint = currentProjectFingerprint();
@@ -357,21 +363,26 @@ async function flushProjectSave({ createRecovery = true } = {}) {
 }
 
 function persist() {
-  clearTimeout(saveTimer);
+  if (activeProjectId) setSaveLabel('Unsaved changes');
+}
+
+async function saveCurrentProject() {
+  if (!activeProjectId) return;
   setSaveLabel('Saving…', true);
-  saveTimer = window.setTimeout(async () => {
+  try {
+    await flushProjectSave({ createRecovery: false });
     saveSettings(currentSettings());
-    try {
-      await flushProjectSave();
-      setSaveLabel('Saved just now · on this device');
-    } catch (error) {
-      setSaveLabel('Save failed');
-      const message = error?.name === 'QuotaExceededError'
-        ? 'Local storage is full. Your edits are still open; export this session before clearing space.'
-        : 'Saving was interrupted. Your edits are still open and the next change will retry.';
-      toast(message, 'error', 5200);
-    }
-  }, 260);
+    setSaveLabel('Saved just now · on this device');
+    renderProjectLibrary();
+    await updateProjectRecovery();
+    toast('Session saved', 'success');
+  } catch (error) {
+    setSaveLabel('Save failed');
+    const message = error?.name === 'QuotaExceededError'
+      ? 'Local storage is full. Export this session before clearing space.'
+      : 'This session could not be saved. Your edits are still open for export or another save attempt.';
+    toast(message, 'error', 5600);
+  }
 }
 
 function updateThemeToggle(theme) {
@@ -1028,13 +1039,12 @@ async function finalizeInputRecording() {
       updatedAt: Date.now(),
     };
     recordedPads.set(record.slot, record);
-    await saveRecordedPad(record);
     persist();
     renderPads();
-    micStatus.textContent = `${record.name} saved to pad ${key}`;
-    privacyLabel.textContent = 'Saved locally';
-    toast(`${record.name} saved · use the trash button to delete`, 'success', 4800);
-    announce(`${record.name} saved and ready to play`);
+    micStatus.textContent = `${record.name} ready on pad ${key}`;
+    privacyLabel.textContent = 'Unsaved session';
+    toast(`${record.name} recorded · Save the session to keep it`, 'success', 4800);
+    announce(`${record.name} recorded and ready to play`);
   } catch (error) {
     toast(error.message, 'error');
     micStatus.textContent = 'Capture failed — try again';
@@ -1061,10 +1071,9 @@ async function importAudioFile(file, pad) {
     const duration = await engine.registerRecording(slot, file);
     const record = { slot, blob: file, duration, name: file.name.replace(/\.[^.]+$/, '').slice(0, 24) || 'Imported sound', ...normalizeSampleSettings({}, duration), updatedAt: Date.now() };
     recordedPads.set(slot, record);
-    await saveRecordedPad(record);
     persist();
     renderPads();
-    toast(`${record.name} loaded · use the trash button to delete`, 'success', 4800);
+    toast(`${record.name} loaded · Save the session to keep it`, 'success', 4800);
     announce(`${record.name} loaded onto pad ${pad.dataset.key.toUpperCase()}`);
   } catch {
     toast('This audio file could not be decoded.', 'error');
@@ -1075,22 +1084,17 @@ async function clearRecordedPad(pad) {
   const slot = pad.dataset.slot;
   const record = recordedPads.get(slot);
   if (!record) return;
-  try {
-    await removeRecordedPad(slot);
-    recordedPads.delete(slot);
-    engine.removeRecording(slot);
-    state.patterns.forEach((pattern) => { pattern.events = pattern.events.filter((event) => event.slot !== slot); });
-    history = [sequenceSnapshot()];
-    historyIndex = 0;
-    renderPads();
-    renderSequencer();
-    renderHistoryControls();
-    persist();
-    toast(`${record.name} cleared`);
-    announce(`${record.name} removed from pad ${pad.dataset.key.toUpperCase()}`);
-  } catch {
-    toast('The recording could not be cleared.', 'error');
-  }
+  recordedPads.delete(slot);
+  engine.removeRecording(slot);
+  state.patterns.forEach((pattern) => { pattern.events = pattern.events.filter((event) => event.slot !== slot); });
+  history = [sequenceSnapshot()];
+  historyIndex = 0;
+  renderPads();
+  renderSequencer();
+  renderHistoryControls();
+  persist();
+  toast(`${record.name} cleared · Save the session to keep this change`);
+  announce(`${record.name} removed from pad ${pad.dataset.key.toUpperCase()}`);
 }
 
 function requestClearRecordedPad(pad) {
@@ -1376,7 +1380,6 @@ async function saveActiveSample(settings, { redraw = true } = {}) {
   const record = recordedPads.get(activeSampleSlot);
   if (!record) return;
   updateRecordSettings(record, settings);
-  await saveRecordedPad(record);
   persist();
   if (redraw) renderSampleEditor();
   renderPads();
@@ -1405,7 +1408,6 @@ async function duplicateActiveSample() {
   const copy = { ...record, slot: target, name: `${record.name} copy`.slice(0, 24), updatedAt: Date.now() };
   await engine.registerRecording(target, copy.blob);
   recordedPads.set(target, copy);
-  await saveRecordedPad(copy);
   persist();
   renderPads();
   populateMoveTargets();
@@ -1427,16 +1429,15 @@ async function moveOrSwapActiveSample() {
     const swapped = { ...targetRecord, slot: from, updatedAt: Date.now() };
     recordedPads.set(to, moved);
     recordedPads.set(from, swapped);
-    await Promise.all([engine.registerRecording(to, moved.blob), engine.registerRecording(from, swapped.blob), saveRecordedPad(moved), saveRecordedPad(swapped)]);
+    await Promise.all([engine.registerRecording(to, moved.blob), engine.registerRecording(from, swapped.blob)]);
     remapEventSlots(from, to, true);
     toast(`Pads swapped`, 'success');
   } else {
     const moved = { ...record, slot: to, updatedAt: Date.now() };
-    await removeRecordedPad(from);
     engine.removeRecording(from);
     recordedPads.delete(from);
     recordedPads.set(to, moved);
-    await Promise.all([engine.registerRecording(to, moved.blob), saveRecordedPad(moved)]);
+    await engine.registerRecording(to, moved.blob);
     remapEventSlots(from, to);
     toast(`${record.name} moved to ${to.replace(':', ' · ')}`, 'success');
   }
@@ -1452,7 +1453,6 @@ async function replaceActiveSample(file) {
   try {
     const duration = await engine.registerRecording(record.slot, file);
     Object.assign(record, { blob: file, duration, ...normalizeSampleSettings({}, duration), updatedAt: Date.now() });
-    await saveRecordedPad(record);
     persist();
     renderPads();
     renderSampleEditor();
@@ -1665,16 +1665,10 @@ async function initializeProjectSession() {
 
 async function openProjectLibrary() {
   projectReturnFocus = document.activeElement;
-  let saveError = null;
-  try {
-    await flushProjectSave();
-  } catch (error) {
-    saveError = error;
-  }
   await refreshProjectCache();
   await updateProjectRecovery();
-  showProjectError(saveError
-    ? 'The current edits are still open but have not been saved. You can export them or retry after making another change.'
+  showProjectError(hasUnsavedProjectChanges()
+    ? 'This session has unsaved changes. Save it before switching projects.'
     : '');
   projectSheet.classList.add('open');
   projectScrim.classList.add('open');
@@ -1695,6 +1689,10 @@ function closeProjectLibrary() {
 }
 
 async function createNewProject(name) {
+  if (hasUnsavedProjectChanges()) {
+    showProjectError('Save the current session before creating another project.');
+    return;
+  }
   const safeName = uniqueProjectName(name, projectCache.map((project) => project.name));
   const project = createProjectRecord({ name: safeName, settings: defaultProjectSettings(safeName) });
   await saveProjectSession(project, { createRecovery: false });
@@ -1778,7 +1776,7 @@ async function exportCurrentProject() {
   if (!activeProjectId) return;
   showProjectError();
   try {
-    const project = await flushProjectSave();
+    const project = currentProjectRecord();
     const bundle = await serializeProjectBundle(project);
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([bundle], { type: 'application/json' }));
@@ -1809,6 +1807,10 @@ async function saveImportedProject(project, { replace = null } = {}) {
 
 async function importProjectBundle(file) {
   showProjectError();
+  if (hasUnsavedProjectChanges()) {
+    showProjectError('Save or export the current session before importing another project.');
+    return;
+  }
   try {
     const imported = parseProjectBundle(await file.text(), { existingNames: [] });
     const conflict = projectCache.find((project) => project.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase());
@@ -1960,6 +1962,7 @@ function wireEvents() {
   stopButton.addEventListener('click', stopTransport);
   recordButton.addEventListener('click', toggleLoopRecording);
   inputRecord.addEventListener('click', toggleInputRecording);
+  saveProjectButton?.addEventListener('click', saveCurrentProject);
   exportButton.addEventListener('click', exportLoop);
   shareButton.addEventListener('click', shareStudio);
   projectName.addEventListener('click', openProjectLibrary);
@@ -1988,16 +1991,20 @@ function wireEvents() {
     if (!actionButton || !item) return;
     const projectId = item.dataset.projectId;
     if (actionButton.dataset.projectAction === 'open') {
-      try {
-        await flushProjectSave();
-      } catch {
-        showProjectError('This session is still open but has unsaved edits. Make another change to retry before switching sessions.');
+      if (hasUnsavedProjectChanges()) {
+        showProjectError('Save the current session before switching projects.');
         return;
       }
       await loadProjectIntoStudio(projectCache.find((project) => project.id === projectId));
       closeProjectLibrary();
     }
-    if (actionButton.dataset.projectAction === 'rename') beginLibraryRename(projectId);
+    if (actionButton.dataset.projectAction === 'rename') {
+      if (projectId === activeProjectId && hasUnsavedProjectChanges()) {
+        showProjectError('Save the current session before renaming it.');
+        return;
+      }
+      beginLibraryRename(projectId);
+    }
     if (actionButton.dataset.projectAction === 'duplicate') await duplicateLibraryProject(projectId);
     if (actionButton.dataset.projectAction === 'delete') await requestDeleteLibraryProject(projectId);
   });
@@ -2165,7 +2172,6 @@ function wireEvents() {
     state.patterns.forEach((pattern) => pattern.events.forEach((event) => {
       if (event.slot === activeSampleSlot) event.name = record.name;
     }));
-    await saveRecordedPad(record);
     renderPads();
     renderSequencer();
     renderSampleEditor();
@@ -2220,7 +2226,6 @@ function wireEvents() {
       handle.removeEventListener('pointercancel', finish);
       const record = recordedPads.get(activeSampleSlot);
       if (record) {
-        await saveRecordedPad(record);
         persist();
       }
       announce('Trim updated');
@@ -2293,6 +2298,11 @@ function wireEvents() {
     const target = event.target;
     if (target.matches('input, select, textarea') || target.isContentEditable) return;
     const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === 's') {
+      event.preventDefault();
+      saveCurrentProject();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && key === 'z') {
       event.preventDefault();
       event.shiftKey ? redo() : undo();
@@ -2321,7 +2331,13 @@ function wireEvents() {
       pad.classList.remove('is-hit');
     }
   });
-  window.addEventListener('beforeunload', releaseInputStream);
+  window.addEventListener('beforeunload', (event) => {
+    releaseInputStream();
+    if (hasUnsavedProjectChanges()) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
 }
 
 async function restoreRecordings() {

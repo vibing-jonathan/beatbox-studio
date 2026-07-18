@@ -172,6 +172,10 @@ export async function saveProjectSession(project, { createRecovery = true } = {}
     if (createRecovery) {
       try { previous = await readDatabaseRecord(db, PROJECT_STORE, saved.id); } catch { /* recovery is best effort */ }
     }
+    // Remove the older recovery copy before writing the live project. This
+    // prevents duplicated audio blobs from consuming the space needed to save.
+    try { await deleteDatabaseRecord(db, RECOVERY_STORE, saved.id); } catch { /* best effort */ }
+    await putDatabaseRecord(db, PROJECT_STORE, saved);
     if (previous && Number(previous.updatedAt) !== Number(saved.updatedAt)) {
       try {
         await putDatabaseRecord(db, RECOVERY_STORE, {
@@ -180,12 +184,10 @@ export async function saveProjectSession(project, { createRecovery = true } = {}
           savedAt: Date.now(),
         });
       } catch {
-        // Recovery is secondary to the live project. If it cannot be replaced
-        // (most commonly because storage is full), discard it and keep saving.
+        // Recovery is secondary to the live project.
         try { await deleteDatabaseRecord(db, RECOVERY_STORE, saved.id); } catch { /* best effort */ }
       }
     }
-    await putDatabaseRecord(db, PROJECT_STORE, saved);
     return saved;
   } finally {
     db.close();
