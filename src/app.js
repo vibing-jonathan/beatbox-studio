@@ -1,5 +1,6 @@
 import { AudioEngine, audioBufferToWav } from './audio-engine.js';
 import { loadRecordedPads, loadSettings, removeRecordedPad, saveRecordedPad, saveSettings } from './storage.js';
+import { loopPositionAtTime, normalizeLoopPosition, quantizeLoopPosition, SWING_OFFSET_STEPS } from './timing.js';
 
 const engine = new AudioEngine();
 const padElements = [...document.querySelectorAll('.pad')];
@@ -273,7 +274,7 @@ function renderOverdubMarkers() {
   state.customEvents.forEach((event, index) => {
     const marker = document.createElement('button');
     marker.className = 'overdub-marker';
-    marker.style.left = `${(event.step / 64) * 100}%`;
+    marker.style.left = `${(eventLoopPosition(event) / 64) * 100}%`;
     marker.title = `${event.name} at ${formatPosition(event.step)}`;
     marker.setAttribute('aria-label', `${event.name} overdub at ${formatPosition(event.step)}. Click to remove.`);
     marker.addEventListener('click', () => {
@@ -332,18 +333,31 @@ function activeTrack(index) {
 }
 
 function swingDelayForStep(step) {
-  return state.quantize === '1/8 swing' && step % 4 === 2 ? (60 / state.bpm / 4) * 0.55 : 0;
+  return state.quantize === '1/8 swing' && step % 4 === 2 ? (60 / state.bpm / 4) * SWING_OFFSET_STEPS : 0;
+}
+
+function eventOffsetSteps(event) {
+  if (event.quantize === '1/8 swing' && event.step % 4 === 2) return SWING_OFFSET_STEPS;
+  if (Number.isFinite(event.offset)) return clamp(event.offset, 0, 0.999999);
+  if (!event.quantize && state.quantize === '1/8 swing' && event.step % 4 === 2) return SWING_OFFSET_STEPS;
+  return 0;
+}
+
+function eventLoopPosition(event) {
+  return normalizeLoopPosition(event.step + eventOffsetSteps(event));
 }
 
 function scheduleStep(step, when) {
   const hitTime = when + swingDelayForStep(step);
+  const secondsPerStep = 60 / state.bpm / 4;
   TRACKS.forEach((track, index) => {
     if (!activeTrack(index) || !track.steps.includes(step)) return;
     engine.play(track.type, { when: hitTime, gain: track.gain * (state.trackStates[index].volume / 100) });
   });
   for (const event of state.customEvents.filter((item) => item.step === step)) {
-    if (event.recorded && engine.playRecording(event.slot, { when: hitTime, gain: 0.9 })) continue;
-    engine.play(event.type, { when: hitTime, gain: 0.8 });
+    const eventTime = when + eventOffsetSteps(event) * secondsPerStep;
+    if (event.recorded && engine.playRecording(event.slot, { when: eventTime, gain: 0.9 })) continue;
+    engine.play(event.type, { when: eventTime, gain: 0.8 });
   }
   if (state.metronome && step % 4 === 0) engine.play('click', { when, gain: step % 16 === 0 ? 0.32 : 0.18 });
   if (pendingRecordSteps > 0) {
@@ -366,7 +380,8 @@ function scheduler() {
 function updatePlayhead() {
   if (!isPlaying || !engine.context) return;
   const loopDuration = (60 / state.bpm) * 16;
-  const progress = clamp(((engine.currentTime - loopStartTime) % loopDuration) / loopDuration, 0, 1);
+  const audibleTime = engine.currentTime - engine.outputLatency;
+  const progress = clamp(((audibleTime - loopStartTime) % loopDuration) / loopDuration, 0, 1);
   const visualStep = Math.floor(progress * 64) % 64;
   playhead.style.left = `${progress * 100}%`;
   mobileLoopRail.style.setProperty('--loop-progress', `${progress * 100}%`);
@@ -458,9 +473,10 @@ async function toggleLoopRecording() {
   setLoopRecording(true);
 }
 
-function quantizedStep() {
-  const quantum = state.quantize === '1/8' || state.quantize === '1/8 swing' ? 2 : 1;
-  return Math.round(currentStep / quantum) * quantum % 64;
+function capturedOverdubTiming(audioTime) {
+  const secondsPerStep = 60 / state.bpm / 4;
+  const rawPosition = loopPositionAtTime(audioTime, loopStartTime, secondsPerStep);
+  return quantizeLoopPosition(rawPosition, state.quantize);
 }
 
 async function triggerPad(pad, velocity = 1) {
@@ -478,20 +494,23 @@ async function triggerPad(pad, velocity = 1) {
     toast(error.message, 'error');
     return;
   }
-  const played = definition.recorded && engine.playRecording(definition.slot, { gain: velocity });
-  if (!played) engine.play(definition.type, { gain: velocity });
+  const padTime = engine.currentTime;
+  const played = definition.recorded && engine.playRecording(definition.slot, { when: padTime, gain: velocity });
+  if (!played) engine.play(definition.type, { when: padTime, gain: velocity });
   pad.classList.add('is-hit');
   window.setTimeout(() => pad.classList.remove('is-hit'), 120);
   if (isLoopRecording) {
+    const timing = capturedOverdubTiming(padTime);
     const event = {
-      step: quantizedStep(),
+      ...timing,
+      quantize: state.quantize,
       slot: definition.slot,
       name: definition.name,
       type: definition.type,
       recorded: definition.recorded,
     };
-    const withoutDuplicate = state.customEvents.filter((item) => !(item.step === event.step && item.slot === event.slot));
-    commitHistory([...withoutDuplicate, event].sort((a, b) => a.step - b.step));
+    const withoutDuplicate = state.customEvents.filter((item) => !(item.slot === event.slot && Math.abs(eventLoopPosition(item) - eventLoopPosition(event)) < 0.05));
+    commitHistory([...withoutDuplicate, event].sort((a, b) => eventLoopPosition(a) - eventLoopPosition(b)));
   }
   announce(`${definition.name} played`);
 }
@@ -689,7 +708,7 @@ function collectLoopEvents(includeRecorded = true) {
   });
   state.customEvents.forEach((event) => {
     const buffer = includeRecorded && event.recorded ? engine.getRecordingBuffer?.(event.slot) : null;
-    events.push({ type: event.type, buffer, time: event.step * secondsPerStep + swingDelayForStep(event.step), gain: 0.8 });
+    events.push({ type: event.type, buffer, time: eventLoopPosition(event) * secondsPerStep, gain: 0.8 });
   });
   return events;
 }
@@ -927,7 +946,7 @@ async function restoreRecordings() {
 function initialize() {
   decoratePadShells();
   decorateTrackControls();
-  state.customEvents = state.customEvents.filter((event) => Number.isInteger(event.step) && event.step >= 0 && event.step < 64);
+  state.customEvents = state.customEvents.filter((event) => Number.isInteger(event.step) && event.step >= 0 && event.step < 64 && (!Number.isFinite(event.offset) || (event.offset >= 0 && event.offset < 1)));
   history = [structuredClone(state.customEvents)];
   historyIndex = 0;
   bpmInput.value = String(state.bpm);

@@ -18,6 +18,7 @@ Run the dependency-free audio export test with:
 
 ```powershell
 node tests/audio-engine.test.mjs
+node tests/timing.test.mjs
 ```
 
 ## Features
